@@ -1,13 +1,10 @@
 import requests
 import os
 import time
-from dotenv import load_dotenv
 import chess
 import chess.engine
 
 
-#Charger les variables d'environnement depuis un fichier .env
-load_dotenv()
 
 # Ton pseudo Chess.com
 username = "oleac123"
