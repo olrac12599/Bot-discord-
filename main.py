@@ -1,103 +1,70 @@
 import requests
 import os
 import time
-import chess
+import chess.pgn
 import chess.engine
 
 # Ton pseudo Chess.com
-username = "oleac123"
-
-# Récupérer le token Discord et le webhook URL depuis les variables d'environnement
+username = 'bwbdjdj28288'
 webhook_url = os.getenv('WEBHOOK_URL')
+stockfish_path = "path_to_your_stockfish_executable"  # Remplace ça
 
-# Fonction pour récupérer la partie active en cours
-def get_active_game():
-    # Vérifie les parties actives en ligne (en temps réel)
-    url = f"https://api.chess.com/pub/player/{username}/games"
+# Récupère l’URL de la dernière archive
+def get_latest_game_url():
+    archives_url = f"https://api.chess.com/pub/player/{username}/games/archives"
+    response = requests.get(archives_url)
+    if response.status_code == 200:
+        last_url = response.json()["archives"][-1]
+        return last_url
+    return None
+
+# Récupère la dernière partie jouée (terminée)
+def get_last_finished_game():
+    url = get_latest_game_url()
+    if not url:
+        return None
     response = requests.get(url)
     if response.status_code == 200:
-        data = response.json()
-        for game in data['games']:
-            if game['status'] == 'in_progress':  # Partie en cours
-                print(f"Partie active trouvée : {game['id']}")
+        games = response.json()["games"]
+        for game in reversed(games):
+            if game["status"] == "mate" or game["status"] == "resigned" or game["status"] == "timeout":
                 return game
     return None
 
-# Fonction pour récupérer l'état de la partie à partir de l'ID
-def get_game_state(game_id):
-    url = f"https://api.chess.com/pub/game/{game_id}"
-    response = requests.get(url)
-    if response.status_code == 200:
-        return response.json()
-    return None
+# Analyse les coups avec Stockfish
+def analyze_game(pgn_text):
+    game = chess.pgn.read_game(pgn_text)
+    board = game.board()
 
-# Fonction pour analyser la position avec Stockfish
-def analyze_position(board_fen, time_limit=2.0):
-    stockfish_path = "path_to_your_stockfish_executable"  # Remplace par le chemin vers ton fichier Stockfish
-
-    # Lancer Stockfish
     with chess.engine.SimpleEngine.popen_uci(stockfish_path) as engine:
-        board = chess.Board(board_fen)  # Charger la position FEN de la partie
-        result = engine.play(board, chess.engine.Limit(time=time_limit))  # Analyser pendant `time_limit` secondes
-        return result.move
+        for move in game.mainline_moves():
+            info = engine.analyse(board, chess.engine.Limit(time=0.5))
+            best_move = info["pv"][0]
+            if move != best_move:
+                msg = f"Erreur détectée : joué {move}, meilleur coup était {best_move}"
+                send_discord_notification(msg)
+            board.push(move)
 
-# Fonction pour envoyer une notification via Discord
+# Envoie un message sur Discord
 def send_discord_notification(message):
-    print(f"Envoi du message: {message}")  # Pour vérifier dans la console
-    data = {
-        "content": message
-    }
+    data = {"content": message}
     response = requests.post(webhook_url, json=data)
     if response.status_code == 204:
-        print("Notification envoyée avec succès")
+        print("Message envoyé")
     else:
-        print(f"Erreur lors de l'envoi de la notification : {response.status_code}")
+        print(f"Erreur Discord: {response.status_code}")
 
-# Fonction principale pour surveiller les parties actives
-def monitor_game():
-    previous_game_id = None
-    while True:
-        active_game = get_active_game()
-        if active_game:
-            active_game_id = active_game['id']
-            if active_game_id != previous_game_id:
-                print(f"Nouvelle partie trouvée : {active_game_id}")
-                previous_game_id = active_game_id
-            game_state = get_game_state(active_game_id)
-            if game_state:
-                board_fen = game_state['board']['fen']
-                white_time = game_state['white']['time_left']
-                black_time = game_state['black']['time_left']
-                turn = game_state['turn']  # C'est ton tour si 'w' et celui de l'adversaire si 'b'
+# Fonction principale
+def main():
+    game = get_last_finished_game()
+    if game:
+        pgn_url = game.get("pgn")
+        if pgn_url:
+            pgn_text = requests.get(pgn_url).text
+            from io import StringIO
+            analyze_game(StringIO(pgn_text))
+    else:
+        print("Aucune partie terminée trouvée.")
 
-                print(f"Temps restant pour les blancs: {white_time} secondes")
-                print(f"Temps restant pour les noirs: {black_time} secondes")
-
-                # Calculer la quantité de temps restant
-                time_limit = 5.0  # Par défaut, on donne 5 secondes pour analyser le coup
-
-                if turn == 'w':  # C'est à ton tour de jouer
-                    if white_time < 30:  # Si tu as moins de 30 secondes, jouer plus vite
-                        time_limit = 1.0
-                        print("Tu as moins de 30 secondes, le bot va jouer plus vite.")
-                    best_move = analyze_position(board_fen, time_limit)
-                    message = f"Le meilleur coup à jouer est : {best_move}"
-                    send_discord_notification(message)
-
-                elif turn == 'b':  # C'est l'adversaire qui joue
-                    if black_time < 30:  # Si l'adversaire a moins de 30 secondes, il peut faire des erreurs
-                        time_limit = 1.0  # Plus de temps pour analyser, car on veut capitaliser sur ses erreurs
-                        print("L'adversaire a moins de 30 secondes, le bot joue plus vite.")
-                    best_move = analyze_position(board_fen, time_limit)
-                    message = f"L'adversaire joue le coup : {best_move}"
-                    send_discord_notification(message)
-
-        # Vérifie toutes les 5 secondes
-        time.sleep(5)
-
-# Test d'envoi d'une notification pour s'assurer que le webhook Discord fonctionne
-print("Test d'envoi d'une notification...")
-send_discord_notification("Test de notification du bot Chess.com")
-
-# Lancer la surveillance du jeu
-monitor_game()
+# Lancer
+main()
