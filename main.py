@@ -111,5 +111,4 @@ print("Test d'envoi d'une notification...")
 send_discord_notification("Test de notification du bot Chess.com")
 
 # Lancer la surveillance du jeu
-keep_alive()
 monitor_game()
