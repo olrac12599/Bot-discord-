@@ -1,158 +1,118 @@
-import discord
-import os
 import requests
-import asyncio
+import os
 import time
-from flask import Flask
-from colorama import init, Fore  # Importer colorama pour les erreurs en rouge dans la console
-import threading
+from dotenv import load_dotenv
+import chess
+import chess.engine
 
-# Initialisation de colorama
-init(autoreset=True)
-id_discord = os.environ['id_discord']
-DISCORD_TOKEN = os.environ['caca']  # Remplacer 'caca' par 'DISCORD_TOKEN'
-CLIENT_ID = os.environ['CLIENT_ID']
-ACCESS_TOKEN = os.environ['ACCESS_TOKEN']
 
-STREAMERS_CIBLES = ["tobias", "blazx", "lamatrak", "fugu_fps", "anyme023"]
-LOG_CHANNEL_ID = 1356775675297533965  # ID du salon de logs
-USER_ID_DISCORD = (id_discord)  # Ton ID Discord
+#Charger les variables d'environnement depuis un fichier .env
+load_dotenv()
 
-intents = discord.Intents.default()
-intents.messages = True
-intents.guilds = True
-bot = discord.Client(intents=intents)
+# Ton pseudo Chess.com
+username = "oleac123"
 
-# Fonction pour afficher les erreurs en rouge dans la console
-def log_error(error_message):
-    """Affiche les erreurs en rouge dans la console."""
-    print(Fore.RED + f"❌ Erreur: {error_message}")
+# Récupérer le token Discord et le webhook URL depuis les variables d'environnement
+webhook_url = os.getenv('WEBHOOK_URL')
 
-# Récupérer l'ID de l'utilisateur Twitch
-def get_user_id():
-    try:
-        headers = {
-            'Client-ID': CLIENT_ID,
-            'Authorization': f'Bearer {ACCESS_TOKEN}'
-        }
-        response = requests.get("https://api.twitch.tv/helix/users", headers=headers)
+# URL de l'API pour récupérer les archives de tes parties
+url = f"https://api.chess.com/pub/player/{username}/games/archives"
 
-        if response.status_code == 200:
-            return response.json()["data"][0]["id"]
-        else:
-            log_error("Impossible de récupérer l'ID utilisateur Twitch.")
-            return None
-    except Exception as e:
-        log_error(f"Erreur lors de la récupération de l'ID utilisateur Twitch: {str(e)}")
-        return None
+# Fonction pour récupérer les parties en cours
+def get_active_game():
+    response = requests.get(url)
+    if response.status_code == 200:
+        archives = response.json()['archives']
+        if archives:
+            latest_archive_url = archives[-1]  # Prendre la dernière archive
+            print(f"Récupération de l'archive à l'URL : {latest_archive_url}")
+            games_data = requests.get(latest_archive_url).json()
+            for game in games_data['games']:
+                if game['status'] == 'in_progress':  # Partie en cours
+                    print(f"Partie active trouvée : {game['id']}")
+                    return game
+    return None
 
-# Récupérer les streams en direct
-def get_live_streams(user_id):
-    try:
-        url = f"https://api.twitch.tv/helix/streams/followed?user_id={user_id}"
-        headers = {
-            "Client-ID": CLIENT_ID,
-            "Authorization": f"Bearer {ACCESS_TOKEN}"
-        }
-        response = requests.get(url, headers=headers)
+# Fonction pour récupérer l'état de la partie à partir de l'ID
+def get_game_state(game_id):
+    url = f"https://api.chess.com/pub/game/{game_id}"
+    response = requests.get(url)
+    return response.json()
 
-        if response.status_code == 200:
-            return response.json().get("data", [])
-        else:
-            log_error("Erreur API Twitch lors de la récupération des streams.")
-            return []
-    except Exception as e:
-        log_error(f"Erreur lors de la récupération des streams: {str(e)}")
-        return []
+# Fonction pour analyser la position avec Stockfish
+def analyze_position(board_fen, time_limit=2.0):
+    stockfish_path = "path_to_your_stockfish_executable"  # Remplace par le chemin vers ton fichier Stockfish
 
-# Envoyer ou mettre à jour un DM
-async def send_or_update_dm(user, embed, message_id=None):
-    try:
-        if message_id:
-            msg = await user.fetch_message(message_id)
-            await msg.edit(embed=embed)
-        else:
-            msg = await user.send(embed=embed)
-            return msg.id
-    except discord.Forbidden:
-        log_error(f"Impossible d'envoyer un message à {user.name}.")
-    except discord.NotFound:
-        log_error("Le message n'a pas été trouvé.")
-    return message_id
+    # Lancer Stockfish
+    with chess.engine.SimpleEngine.popen_uci(stockfish_path) as engine:
+        board = chess.Board(board_fen)  # Charger la position FEN de la partie
+        result = engine.play(board, chess.engine.Limit(time=time_limit))  # Analyser pendant `time_limit` secondes
+        return result.move
 
-# Enregistrer les actions dans le canal de logs
-async def log_action(content):
-    channel = bot.get_channel(LOG_CHANNEL_ID)
-    if channel:
-        await channel.send(content)
+# Fonction pour envoyer une notification via Discord
+def send_discord_notification(message):
+    print(f"Envoi du message: {message}")  # Pour vérifier dans la console
+    data = {
+        "content": message
+    }
+    response = requests.post(webhook_url, json=data)
+    if response.status_code == 204:
+        print("Notification envoyée avec succès")
+    else:
+        print(f"Erreur lors de l'envoi de la notification : {response.status_code}")
 
-@bot.event
-async def on_ready():
-    print(f"✅ Connecté en tant que {bot.user}")
-    await log_action("✅ Bot démarré et prêt à fonctionner !")
-    bot.loop.create_task(update_stream_notifications())
+# Fonction principale pour surveiller les parties actives
+def monitor_game():
+    previous_game_id = None
+    start_time = time.time()  # Temps de début du script
+    while True:
+        active_game = get_active_game()
+        if active_game:
+            active_game_id = active_game['id']
+            if active_game_id != previous_game_id:
+                print(f"Nouvelle partie trouvée : {active_game_id}")
+                previous_game_id = active_game_id
+            game_state = get_game_state(active_game_id)
+            board_fen = game_state['board']['fen']
+            white_time = game_state['white']['time_left']
+            black_time = game_state['black']['time_left']
+            turn = game_state['turn']  # C'est ton tour si 'w' et celui de l'adversaire si 'b'
 
-# Fonction principale de mise à jour des notifications de streamers
-async def update_stream_notifications():
-    await bot.wait_until_ready()
-    user_id = get_user_id()
-    if not user_id:
-        log_error("Impossible de récupérer l'ID utilisateur Twitch.")
-        return
+            print(f"Temps restant pour les blancs: {white_time} secondes")
+            print(f"Temps restant pour les noirs: {black_time} secondes")
 
-    notified_streamers = {}
+            # Calculer la quantité de temps restant
+            time_limit = 5.0  # Par défaut, on donne 5 secondes pour analyser le coup
 
-    while not bot.is_closed():
-        live_streams = get_live_streams(user_id)
-        live_info = {s["user_login"].lower(): s for s in live_streams}
+            if turn == 'w':  # C'est à ton tour de jouer
+                if white_time < 30:  # Si tu as moins de 30 secondes, jouer plus vite
+                    time_limit = 1.0
+                    print("Tu as moins de 30 secondes, le bot va jouer plus vite.")
+                best_move = analyze_position(board_fen, time_limit)
+                message = f"Le meilleur coup à jouer est : {best_move}"
+                send_discord_notification(message)
 
-        embed = discord.Embed(title="🎥 **Streamers en Live**", color=0x9146FF)
-        updated = False
+            elif turn == 'b':  # C'est l'adversaire qui joue
+                if black_time < 30:  # Si l'adversaire a moins de 30 secondes, il peut faire des erreurs
+                    time_limit = 1.0  # Plus de temps pour analyser, car on veut capitaliser sur ses erreurs
+                    print("L'adversaire a moins de 30 secondes, le bot joue plus vite.")
+                best_move = analyze_position(board_fen, time_limit)
+                message = f"L'adversaire joue le coup : {best_move}"
+                send_discord_notification(message)
 
-        for streamer in STREAMERS_CIBLES:
-            if streamer in live_info:
-                info = live_info[streamer]
+        # Vérifie toutes les 5 secondes
+        time.sleep(5)
 
-                # 🔄 Ajoute un timestamp unique pour forcer la mise à jour de l'image
-                timestamp = int(time.time())
-                preview_url = f"https://static-cdn.jtvnw.net/previews-ttv/live_user_{streamer}-600x340.jpg?rand={timestamp}"
+        # Vérifier si la partie a duré plus de 10 minutes (600 secondes)
+        elapsed_time = time.time() - start_time
+        if elapsed_time > 600:
+            print("Le temps de la partie est écoulé.")
+            break  # La partie est terminée, on arrête le bot
 
-                embed.add_field(
-                    name=f"🔴 {info['user_name']}",
-                    value=f"🎮 **{info['game_name']}**\n"
-                          f"📖 {info['title']}\n"
-                          f"👥 {info['viewer_count']} spectateurs\n"
-                          f"[▶️ Regarder](https://twitch.tv/{streamer})",
-                    inline=False
-                )
+# Test d'envoi d'une notification pour s'assurer que le webhook Discord fonctionne
+print("Test d'envoi d'une notification...")
+send_discord_notification("Test de notification du bot Chess.com")
 
-                # Met à jour l'image de l'embed
-                embed.set_image(url=preview_url)
-
-                if streamer not in notified_streamers:
-                    notified_streamers[streamer] = None
-                    updated = True
-
-        if updated or len(embed.fields) != len(notified_streamers):
-            user = await bot.fetch_user(USER_ID_DISCORD)
-            notified_streamers[streamer] = await send_or_update_dm(user, embed, notified_streamers.get(streamer))
-            await log_action(f"🔔 **Mise à jour des streamers en live.**")
-
-        await asyncio.sleep(30)  # Mise à jour toutes les 30 secondes (plus raisonnable)
-
-# Flask : Serveur simple pour vérifier que le bot est en ligne
-app = Flask(__name__)
-
-@app.route('/')
-def home():
-    return "Le bot est en ligne !"
-
-# Fonction pour démarrer Flask dans un thread séparé
-def run_flask():
-    app.run(host="0.0.0.0", port=8080, debug=False)  # Désactivation du reloader
-
-# Démarrer le serveur Flask dans un thread séparé
-threading.Thread(target=run_flask).start()
-
-# Lancement du bot Discord
-bot.run(DISCORD_TOKEN)
+# Lancer la surveillance du jeu
+keep_alive()
+monitor_game()
