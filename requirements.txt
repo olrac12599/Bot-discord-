@@ -1,5 +1,4 @@
-discord.py
-python-chess
-requests
-flask
-pillow
+discord.py==2.3.2
+requests==2.31.0
+Pillow==10.2.0
+beautifulsoup4==4.12.3
