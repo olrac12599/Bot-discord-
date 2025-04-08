@@ -44,15 +44,25 @@ last_video = {name: "" for name in STREAMERS_YT}
 def get_last_video(channel_display_name):
     handle = STREAMERS_YT[channel_display_name]
     url = f"https://www.youtube.com/{handle}/videos"
-    headers = {"User-Agent": "Mozilla/5.0"}
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.3"
+    }
     response = requests.get(url, headers=headers)
+    
+    if response.status_code != 200:
+        print(f"Erreur lors de la récupération de la page pour {channel_display_name}: {response.status_code}")
+        return None, None
+
     soup = BeautifulSoup(response.text, 'html.parser')
     video_tag = soup.find('a', id='video-title')
+    
     if video_tag:
         video_url = "https://www.youtube.com" + video_tag['href']
         video_title = video_tag.get('title')
         return video_url, video_title
-    return None, None
+    else:
+        print(f"Aucune vidéo trouvée pour {channel_display_name}")
+        return None, None
 
 async def send_latest_youtube_videos():
     await bot.wait_until_ready()
