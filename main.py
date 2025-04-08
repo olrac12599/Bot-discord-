@@ -6,8 +6,9 @@ import time
 from discord.ext import commands
 from PIL import Image
 import io
-from bs4 import BeautifulSoup  # Assure-toi d'avoir bs4 installé !
+from bs4 import BeautifulSoup
 
+# Assure-toi d'avoir bs4 installé pour le scraping de YouTube.
 intents = discord.Intents.default()
 intents.message_content = True
 bot = commands.Bot(command_prefix="!", intents=intents)
@@ -20,6 +21,16 @@ STREAMERS_YT = [
 ]
 last_video = {channel: "" for channel in STREAMERS_YT}
 
+# Configuration Twitch
+CLIENT_ID = os.environ['CLIENT_ID']
+ACCESS_TOKEN = os.environ['ACCESS_TOKEN']
+TEXT_NOTIFY_CHANNEL_ID = 1357601068921651203  # Remplace par ton propre channel ID Discord
+STREAMERS_CIBLES = {"fugu_fps", "tobias", "blazx", "lamatrak", "Aneyaris_", "anyme023"}
+streamers_dynamique = set()
+notified_message_id = None
+empty_message_id = None
+
+# Fonction pour obtenir la dernière vidéo YouTube d'un streamer
 def get_last_video(channel_name):
     url = f"https://www.youtube.com/c/{channel_name}/videos"
     response = requests.get(url)
@@ -31,13 +42,17 @@ def get_last_video(channel_name):
         return video_url, video_title
     return None, None
 
+# Fonction pour obtenir ou créer un canal pour chaque YouTuber dans Discord
 async def get_or_create_channel(channel_name, guild):
     channel = discord.utils.get(guild.text_channels, name=channel_name.lower())
     if not channel:
         category = discord.utils.get(guild.categories, name="YouTube Notifications")
+        if not category:
+            category = await guild.create_category("YouTube Notifications")
         channel = await guild.create_text_channel(channel_name.lower(), category=category)
     return channel
 
+# Vérifie toutes les vidéos YouTube
 async def check_new_videos():
     await bot.wait_until_ready()
     guild = bot.guilds[0]
@@ -53,19 +68,9 @@ async def check_new_videos():
                     color=0xFF0000
                 )
                 await channel.send(content="@everyone", embed=embed)
-        await asyncio.sleep(30)
+        await asyncio.sleep(30)  # Vérifie toutes les 30 secondes
 
-# Twitch settings
-TOKEN_DISCORD = os.environ['TOKEN_DISCORD']
-CLIENT_ID = os.environ['CLIENT_ID']
-ACCESS_TOKEN = os.environ['ACCESS_TOKEN']
-TEXT_NOTIFY_CHANNEL_ID = 1357601068921651203
-
-STREAMERS_CIBLES = {"fugu_fps", "tobias", "blazx", "lamatrak", "Aneyaris_", "anyme023"}
-streamers_dynamique = set()
-notified_message_id = None
-empty_message_id = None
-
+# Fonction pour récupérer l'ID utilisateur Twitch
 def get_user_id():
     headers = {'Client-ID': CLIENT_ID, 'Authorization': f'Bearer {ACCESS_TOKEN}'}
     response = requests.get("https://api.twitch.tv/helix/users", headers=headers)
@@ -73,6 +78,7 @@ def get_user_id():
         return response.json()["data"][0]["id"]
     return None
 
+# Fonction pour obtenir les streams en direct des utilisateurs Twitch
 def get_live_streams(user_id):
     url = f"https://api.twitch.tv/helix/streams/followed?user_id={user_id}"
     headers = {"Client-ID": CLIENT_ID, "Authorization": f'Bearer {ACCESS_TOKEN}'}
@@ -81,12 +87,7 @@ def get_live_streams(user_id):
         return response.json().get("data", [])
     return []
 
-@bot.event
-async def on_ready():
-    print(f"✅ Connecté en tant que {bot.user}")
-    bot.loop.create_task(check_new_videos())
-    bot.loop.create_task(update_stream_notifications())
-
+# Mise à jour des notifications des streams Twitch
 async def update_stream_notifications():
     await bot.wait_until_ready()
     user_id = get_user_id()
@@ -183,7 +184,7 @@ async def update_stream_notifications():
                 empty_msg = await text_channel.send("❌ **Personne n'est en live actuellement.**")
                 empty_message_id = empty_msg.id
 
-        await asyncio.sleep(10)
+        await asyncio.sleep(10)  # Vérifie toutes les 10 secondes
 
 # Commandes
 @bot.command()
@@ -203,4 +204,11 @@ async def all(ctx):
     await ctx.channel.purge()
     await ctx.send("🧹 **Le salon a été nettoyé !**", delete_after=3)
 
+# Lancement du bot
+TOKEN_DISCORD = os.getenv('TOKEN_DISCORD')  # Récupère le token de ton bot via l'environnement
 bot.run(TOKEN_DISCORD)
+    
+                                
+                
+                
+            
