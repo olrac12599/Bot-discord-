@@ -6,33 +6,54 @@ import time
 from discord.ext import commands
 from PIL import Image
 import io
-from bs4 import BeautifulSoup  # Assure-toi d'avoir bs4 installé !
+from bs4 import BeautifulSoup
 
 intents = discord.Intents.default()
 intents.message_content = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 
-# Liste des chaînes YouTube à surveiller
-STREAMERS_YT = [
-    "SQUEEZIE GAMING", "Unchained_off", "Aywen", "SQUEEZIE", "Tobias", "BLAZX EN MIEUX",
-    "FUGU", "RaGe", "[Unchained]", "MichouOff", "Michou", "TobiasEnVrai", "Fiouze",
-    "Anyme TV", "BouziTV", "Lamatrak", "Tobias TV", "Qin Hui", "Jolavanille", "Inoxtag2.0", "Louisbaldiviensdansmonlit"
-]
-last_video = {channel: "" for channel in STREAMERS_YT}
+# Liste des chaînes YouTube à surveiller : Nom affiché -> Handle
+STREAMERS_YT = {
+    "Squeezie": "@Squeezie",
+    "Squeezie Gaming": "@squeeziegaming",
+    "Unchained_off": "@Unchained_off",
+    "Unchained": "@Unchained",
+    "Aywen": "@Aywen",
+    "Tobias": "@TobiasTV",
+    "TobiasEnVrai": "@TobiasEnVrai",
+    "Blazx": "@blazxoff",
+    "BLAZX EN MIEUX": "@blazxenmieux",
+    "Fugu": "@FuguFPS",
+    "RaGe": "@RaGeYT",
+    "Michou": "@MichouOff",
+    "MichouOff": "@MichouOff",
+    "Fiouze": "@Fiouze",
+    "Anyme TV": "@AnymeTV",
+    "Bouzi": "@bouzitv",
+    "BouziTV": "@bouzitv",
+    "Lamatrak": "@lamatrak",
+    "Qin Hui": "@QinHui",
+    "Jolavanille": "@Jolavanille",
+    "Inoxtag": "@Inoxtag",
+    "Inoxtag2.0": "@inoxtag2",
+    "Louis": "@Louisbaldiviensdansmonlit"
+}
+last_video = {name: "" for name in STREAMERS_YT}
 
-# Fonction pour récupérer la dernière vidéo d'une chaîne YouTube
-def get_last_video(channel_name):
-    url = f"https://www.youtube.com/c/{channel_name}/videos"
-    response = requests.get(url)
+# Fonction pour récupérer la dernière vidéo d'une chaîne YouTube via son handle
+def get_last_video(channel_display_name):
+    handle = STREAMERS_YT[channel_display_name]
+    url = f"https://www.youtube.com/{handle}/videos"
+    headers = {"User-Agent": "Mozilla/5.0"}
+    response = requests.get(url, headers=headers)
     soup = BeautifulSoup(response.text, 'html.parser')
-    video_tag = soup.find('a', {'id': 'video-title'})
+    video_tag = soup.find('a', id='video-title')
     if video_tag:
         video_url = "https://www.youtube.com" + video_tag['href']
         video_title = video_tag.get('title')
         return video_url, video_title
     return None, None
 
-# Fonction pour envoyer la dernière vidéo de chaque chaîne dans un salon spécifique au démarrage
 async def send_latest_youtube_videos():
     await bot.wait_until_ready()
     text_channel = bot.get_channel(1357601068921651203)
@@ -64,13 +85,12 @@ async def send_latest_youtube_videos():
 
     await text_channel.send(embed=embed)
 
-# Fonction pour créer ou récupérer un salon
 async def get_or_create_channel(channel_name, guild):
     existing = discord.utils.get(guild.text_channels, name=channel_name.lower())
     if existing:
         return existing
 
-    category = discord.utils.get(guild.categories, id=1357601068921651201)  # ID de la catégorie à utiliser
+    category = discord.utils.get(guild.categories, id=1357601068921651201)
     if not category:
         print("Catégorie introuvable.")
         return None
@@ -78,7 +98,6 @@ async def get_or_create_channel(channel_name, guild):
     new_channel = await guild.create_text_channel(channel_name.lower(), category=category)
     return new_channel
 
-# Fonction pour vérifier les vidéos toutes les 10 secondes
 async def check_new_videos():
     await bot.wait_until_ready()
     guild = bot.guilds[0]
@@ -108,7 +127,6 @@ streamers_dynamique = set()
 notified_message_id = None
 empty_message_id = None
 
-# Fonction pour récupérer l'ID utilisateur
 def get_user_id():
     headers = {'Client-ID': CLIENT_ID, 'Authorization': f'Bearer {ACCESS_TOKEN}'}
     response = requests.get("https://api.twitch.tv/helix/users", headers=headers)
@@ -116,7 +134,6 @@ def get_user_id():
         return response.json()["data"][0]["id"]
     return None
 
-# Fonction pour récupérer les streams en direct
 def get_live_streams(user_id):
     url = f"https://api.twitch.tv/helix/streams/followed?user_id={user_id}"
     headers = {"Client-ID": CLIENT_ID, "Authorization": f'Bearer {ACCESS_TOKEN}'}
@@ -125,15 +142,13 @@ def get_live_streams(user_id):
         return response.json().get("data", [])
     return []
 
-# Événement de démarrage du bot
 @bot.event
 async def on_ready():
     print(f"✅ Connecté en tant que {bot.user}")
-    await send_latest_youtube_videos()  # Résumé des dernières vidéos
+    await send_latest_youtube_videos()
     bot.loop.create_task(check_new_videos())
     bot.loop.create_task(update_stream_notifications())
 
-# Fonction pour notifier les streams en direct
 async def update_stream_notifications():
     await bot.wait_until_ready()
     user_id = get_user_id()
@@ -150,7 +165,6 @@ async def update_stream_notifications():
         live_now = STREAMERS_CIBLES.union(streamers_dynamique).intersection(live_info.keys())
         text_channel = bot.get_channel(TEXT_NOTIFY_CHANNEL_ID)
 
-        # Notif @everyone pour nouveaux streamers en live
         new_live = live_now - already_live
         for new_streamer in new_live:
             msg = await text_channel.send(f"🚨 **{new_streamer} est en live !** @everyone\nhttps://twitch.tv/{new_streamer}")
@@ -231,7 +245,6 @@ async def update_stream_notifications():
 
         await asyncio.sleep(10)
 
-# Commandes du bot
 @bot.command()
 async def a(ctx, streamer: str):
     streamers_dynamique.add(streamer.lower())
@@ -249,5 +262,4 @@ async def all(ctx):
     await ctx.channel.purge()
     await ctx.send("🧹 **Le salon a été nettoyé !**", delete_after=3)
 
-# Démarre le bot
 bot.run(TOKEN_DISCORD)
