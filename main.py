@@ -20,6 +20,7 @@ STREAMERS_YT = [
 ]
 last_video = {channel: "" for channel in STREAMERS_YT}
 
+# Fonction pour récupérer la dernière vidéo d'une chaîne YouTube
 def get_last_video(channel_name):
     url = f"https://www.youtube.com/c/{channel_name}/videos"
     response = requests.get(url)
@@ -27,17 +28,25 @@ def get_last_video(channel_name):
     video_tag = soup.find('a', {'id': 'video-title'})
     if video_tag:
         video_url = "https://www.youtube.com" + video_tag['href']
-        video_title = video_tag['title']
+        video_title = video_tag.get('title')
         return video_url, video_title
     return None, None
 
+# Fonction pour créer ou récupérer un salon
 async def get_or_create_channel(channel_name, guild):
-    channel = discord.utils.get(guild.text_channels, name=channel_name.lower())
-    if not channel:
-        category = discord.utils.get(guild.categories, name="YouTube Notifications")
-        channel = await guild.create_text_channel(channel_name.lower(), category=category)
-    return channel
+    existing = discord.utils.get(guild.text_channels, name=channel_name.lower())
+    if existing:
+        return existing
 
+    category = discord.utils.get(guild.categories, id=1357601068921651201)  # ID de la catégorie à utiliser
+    if not category:
+        print("Catégorie introuvable.")
+        return None
+
+    new_channel = await guild.create_text_channel(channel_name.lower(), category=category)
+    return new_channel
+
+# Fonction pour vérifier les vidéos toutes les 10 secondes
 async def check_new_videos():
     await bot.wait_until_ready()
     guild = bot.guilds[0]
@@ -47,15 +56,16 @@ async def check_new_videos():
             if video_url and video_url != last_video[streamer]:
                 last_video[streamer] = video_url
                 channel = await get_or_create_channel(streamer, guild)
-                embed = discord.Embed(
-                    title=f"📢 Nouvelle vidéo de {streamer} !",
-                    description=f"**Titre :** {video_title}\n**Regarder ici :** [Cliquez pour voir]({video_url})",
-                    color=0xFF0000
-                )
-                await channel.send(content="@everyone", embed=embed)
-        await asyncio.sleep(30)
+                if channel:
+                    embed = discord.Embed(
+                        title=f"📢 Nouvelle vidéo de {streamer}",
+                        description=f"**{video_title}**\n[Regarder ici]({video_url})",
+                        color=0xff0000
+                    )
+                    await channel.send(content="@everyone", embed=embed)
+        await asyncio.sleep(10)
 
-# Twitch settings
+# Paramètres de Twitch
 TOKEN_DISCORD = os.environ['TOKEN_DISCORD']
 CLIENT_ID = os.environ['CLIENT_ID']
 ACCESS_TOKEN = os.environ['ACCESS_TOKEN']
@@ -66,6 +76,7 @@ streamers_dynamique = set()
 notified_message_id = None
 empty_message_id = None
 
+# Fonction pour récupérer l'ID utilisateur
 def get_user_id():
     headers = {'Client-ID': CLIENT_ID, 'Authorization': f'Bearer {ACCESS_TOKEN}'}
     response = requests.get("https://api.twitch.tv/helix/users", headers=headers)
@@ -73,6 +84,7 @@ def get_user_id():
         return response.json()["data"][0]["id"]
     return None
 
+# Fonction pour récupérer les streams en direct
 def get_live_streams(user_id):
     url = f"https://api.twitch.tv/helix/streams/followed?user_id={user_id}"
     headers = {"Client-ID": CLIENT_ID, "Authorization": f'Bearer {ACCESS_TOKEN}'}
@@ -81,12 +93,14 @@ def get_live_streams(user_id):
         return response.json().get("data", [])
     return []
 
+# Événement de démarrage du bot
 @bot.event
 async def on_ready():
     print(f"✅ Connecté en tant que {bot.user}")
     bot.loop.create_task(check_new_videos())
     bot.loop.create_task(update_stream_notifications())
 
+# Fonction pour notifier les streams en direct
 async def update_stream_notifications():
     await bot.wait_until_ready()
     user_id = get_user_id()
@@ -185,7 +199,7 @@ async def update_stream_notifications():
 
         await asyncio.sleep(10)
 
-# Commandes
+# Commandes du bot
 @bot.command()
 async def a(ctx, streamer: str):
     streamers_dynamique.add(streamer.lower())
@@ -203,6 +217,5 @@ async def all(ctx):
     await ctx.channel.purge()
     await ctx.send("🧹 **Le salon a été nettoyé !**", delete_after=3)
 
+# Démarre le bot
 bot.run(TOKEN_DISCORD)
-               
-                           
