@@ -104,10 +104,10 @@ async def update_stream_notifications():
         text_channel = bot.get_channel(TEXT_NOTIFY_CHANNEL_ID)
 
         # Notif @everyone pour nouveaux streamers en live
-        new_live = live_now - already_live
-        for new_streamer in new_live:
-            await text_channel.send(f"🚨 **{new_streamer} est en live !** @everyone\nhttps://twitch.tv/{new_streamer}")
-        already_live = live_now
+new_live = live_now - already_live
+for new_streamer in new_live:
+    msg = await text_channel.send(f"🚨 **{new_streamer} est en live !** @everyone\nhttps://twitch.tv/{new_streamer}")
+    await msg.delete(delay=5)  # Supprime le message après 5 secondes
 
         if live_now:
             embed = discord.Embed(
