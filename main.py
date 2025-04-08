@@ -32,6 +32,7 @@ empty_message_id = None
 
 # Fonction pour obtenir la dernière vidéo YouTube d'un streamer
 def get_last_video(channel_name):
+    print(f"Vérification de la dernière vidéo pour: {channel_name}")
     url = f"https://www.youtube.com/c/{channel_name}/videos"
     response = requests.get(url)
     soup = BeautifulSoup(response.text, 'html.parser')
@@ -39,16 +40,21 @@ def get_last_video(channel_name):
     if video_tag:
         video_url = "https://www.youtube.com" + video_tag['href']
         video_title = video_tag['title']
+        print(f"Nouvelle vidéo trouvée: {video_title} ({video_url})")
         return video_url, video_title
+    print("Aucune vidéo trouvée.")
     return None, None
 
 # Fonction pour obtenir ou créer un canal pour chaque YouTuber dans Discord
 async def get_or_create_channel(channel_name, guild):
+    print(f"Vérification du canal pour {channel_name}")
     channel = discord.utils.get(guild.text_channels, name=channel_name.lower())
     if not channel:
         category = discord.utils.get(guild.categories, name="YouTube Notifications")
         if not category:
+            print("Création de la catégorie YouTube Notifications")
             category = await guild.create_category("YouTube Notifications")
+        print(f"Création du canal pour {channel_name}")
         channel = await guild.create_text_channel(channel_name.lower(), category=category)
     return channel
 
@@ -72,19 +78,27 @@ async def check_new_videos():
 
 # Fonction pour récupérer l'ID utilisateur Twitch
 def get_user_id():
+    print("Récupération de l'ID utilisateur Twitch...")
     headers = {'Client-ID': CLIENT_ID, 'Authorization': f'Bearer {ACCESS_TOKEN}'}
     response = requests.get("https://api.twitch.tv/helix/users", headers=headers)
     if response.status_code == 200:
-        return response.json()["data"][0]["id"]
+        user_id = response.json()["data"][0]["id"]
+        print(f"ID utilisateur récupéré: {user_id}")
+        return user_id
+    print("Impossible de récupérer l'ID utilisateur Twitch.")
     return None
 
 # Fonction pour obtenir les streams en direct des utilisateurs Twitch
 def get_live_streams(user_id):
+    print(f"Récupération des streams en direct pour l'utilisateur ID {user_id}")
     url = f"https://api.twitch.tv/helix/streams/followed?user_id={user_id}"
     headers = {"Client-ID": CLIENT_ID, "Authorization": f'Bearer {ACCESS_TOKEN}'}
     response = requests.get(url, headers=headers)
     if response.status_code == 200:
-        return response.json().get("data", [])
+        streams = response.json().get("data", [])
+        print(f"Streams en direct récupérés: {streams}")
+        return streams
+    print(f"Erreur lors de la récupération des streams: {response.status_code}")
     return []
 
 # Mise à jour des notifications des streams Twitch
@@ -204,11 +218,15 @@ async def all(ctx):
     await ctx.channel.purge()
     await ctx.send("🧹 **Le salon a été nettoyé !**", delete_after=3)
 
+# Commande pour vérifier les permissions du bot dans le canal
+@bot.command()
+async def check_permissions(ctx):
+    channel = ctx.channel
+    perms = channel.permissions_for(ctx.guild.me)
+    await ctx.send(f"Permissions du bot dans ce canal:\n"
+                   f"Envoyer des messages: {perms.send_messages}\n"
+                   f"Utiliser @everyone: {perms.mention_everyone}")
+
 # Lancement du bot
 TOKEN_DISCORD = os.getenv('TOKEN_DISCORD')  # Récupère le token de ton bot via l'environnement
 bot.run(TOKEN_DISCORD)
-    
-                                
-                
-                
-            
