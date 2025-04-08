@@ -32,6 +32,38 @@ def get_last_video(channel_name):
         return video_url, video_title
     return None, None
 
+# Fonction pour envoyer la dernière vidéo de chaque chaîne dans un salon spécifique au démarrage
+async def send_latest_youtube_videos():
+    await bot.wait_until_ready()
+    text_channel = bot.get_channel(1357601068921651203)
+
+    if not text_channel:
+        print("Salon de notification YouTube introuvable.")
+        return
+
+    embed = discord.Embed(
+        title="📺 Dernières vidéos YouTube",
+        description="Voici les vidéos les plus récentes des chaînes suivies :",
+        color=0xff0000
+    )
+
+    for streamer in STREAMERS_YT:
+        video_url, video_title = get_last_video(streamer)
+        if video_url:
+            embed.add_field(
+                name=streamer,
+                value=f"[{video_title}]({video_url})",
+                inline=False
+            )
+        else:
+            embed.add_field(
+                name=streamer,
+                value="❌ Aucune vidéo trouvée",
+                inline=False
+            )
+
+    await text_channel.send(embed=embed)
+
 # Fonction pour créer ou récupérer un salon
 async def get_or_create_channel(channel_name, guild):
     existing = discord.utils.get(guild.text_channels, name=channel_name.lower())
@@ -97,6 +129,7 @@ def get_live_streams(user_id):
 @bot.event
 async def on_ready():
     print(f"✅ Connecté en tant que {bot.user}")
+    await send_latest_youtube_videos()  # Résumé des dernières vidéos
     bot.loop.create_task(check_new_videos())
     bot.loop.create_task(update_stream_notifications())
 
@@ -121,9 +154,8 @@ async def update_stream_notifications():
         new_live = live_now - already_live
         for new_streamer in new_live:
             msg = await text_channel.send(f"🚨 **{new_streamer} est en live !** @everyone\nhttps://twitch.tv/{new_streamer}")
-            await msg.delete(delay=5)  # Supprime le message après 5 secondes
+            await msg.delete(delay=5)
 
-        # Met à jour les streamers déjà en live
         already_live = live_now
 
         if live_now:
