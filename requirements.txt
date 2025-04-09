@@ -1,4 +1,6 @@
 discord.py
+yt-dlp
+youtube-transcript-api
 requests
 beautifulsoup4
 pillow
