@@ -1,4 +1,4 @@
-discord.py
-yt-dlp
-youtube-transcript-api
 fuzzywuzzy
+python-Levenshtein
+discord.py
+youtube-transcript-api
