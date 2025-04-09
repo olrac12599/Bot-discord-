@@ -12,8 +12,12 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 
 # Fonction pour extraire l'ID de la vidéo à partir de l'URL
 def get_video_id(url):
+    # Si l'URL est dans le format youtube.com
     if "youtube.com/watch?v=" in url:
-        return url.split("v=")[-1]
+        return url.split("v=")[-1].split("&")[0]  # Supprimer les paramètres supplémentaires
+    # Si l'URL est dans le format youtu.be
+    elif "youtu.be/" in url:
+        return url.split("youtu.be/")[-1].split("?")[0]  # Supprimer les paramètres supplémentaires
     return None
 
 # Fonction pour rechercher la phrase dans les sous-titres
