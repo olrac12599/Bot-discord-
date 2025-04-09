@@ -21,7 +21,7 @@ def to_date(date_str):
 def get_videos_from_channel(channel_url):
     ydl_opts = {
         'extract_flat': True,
-        'quiet': True,
+        'quiet': False,  # Mettre 'False' pour voir les informations pendant l'extraction
         'force_generic_extractor': True,
     }
     with YoutubeDL(ydl_opts) as ydl:
@@ -40,7 +40,8 @@ def search_in_subtitles(video_id, phrase):
                     'text': entry['text']
                 })
         return results
-    except (TranscriptsDisabled, NoTranscriptFound):
+    except (TranscriptsDisabled, NoTranscriptFound) as e:
+        print(f"[DEBUG] No transcript found for video {video_id}: {e}")
         return []
 
 # === MAIN ===
@@ -56,7 +57,7 @@ async def cherche(ctx, url, *, phrase):
     await ctx.send("Recherche en cours...")
 
     # Dates à utiliser pour la recherche (du 11 décembre 2024 jusqu'à aujourd'hui)
-    start_date = to_date("2025-4-9")
+    start_date = to_date("2024-12-11")
     end_date = datetime.now()  # La date actuelle
 
     videos = get_videos_from_channel(url)
@@ -67,8 +68,10 @@ async def cherche(ctx, url, *, phrase):
         if 'upload_date' in video:
             try:
                 video_date = datetime.strptime(video['upload_date'], "%Y%m%d")
+                print(f"[DEBUG] Vidéo trouvée: {video['title']} | Date: {video_date}")
                 if start_date <= video_date <= end_date:
                     video_id = video['url'].split('v=')[-1]
+                    print(f"[DEBUG] Recherche des sous-titres pour la vidéo: {video_id}")
                     results = search_in_subtitles(video_id, phrase)
                     if results:
                         count += 1
