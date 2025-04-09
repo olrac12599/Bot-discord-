@@ -13,7 +13,9 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 # Fonction pour extraire l'ID de la vidéo à partir de l'URL
 def get_video_id(url):
     if "youtube.com/watch?v=" in url:
-        return url.split("v=")[-1]
+        return url.split("v=")[-1].split("&")[0]  # Prend uniquement la partie après 'v='
+    elif "youtu.be/" in url:
+        return url.split("youtu.be/")[-1].split("?")[0]  # Gère les liens courts
     return None
 
 # Fonction pour rechercher la phrase dans les sous-titres
@@ -23,11 +25,6 @@ def search_in_subtitles(video_id, phrase):
         transcript = YouTubeTranscriptApi.get_transcript(video_id, languages=['fr', 'en'])
 
         results = []
-        # Afficher tous les sous-titres récupérés pour déboguer
-        print("Sous-titres récupérés:")
-        for entry in transcript:
-            print(entry['start'], entry['text'])  # Affiche l'heure et le texte des sous-titres
-
         # Chercher la phrase dans les sous-titres
         for entry in transcript:
             if phrase.lower() in entry['text'].lower():
