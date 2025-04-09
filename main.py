@@ -3,6 +3,9 @@ from youtube_transcript_api import YouTubeTranscriptApi, TranscriptsDisabled, No
 from datetime import datetime
 import discord
 from discord.ext import commands
+import os
+
+TOKEN_DISCORD= os.dotenv('TOKEN_DISCORD')
 
 # Fonction pour convertir une chaîne de date en datetime
 def to_date(date_str):
