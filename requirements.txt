@@ -1,4 +1,6 @@
-fuzzywuzzy
-python-Levenshtein
-discord.py
-youtube-transcript-api
+discord.py==2.0.0
+requests==2.28.2
+beautifulsoup4==4.11.2
+yt-dlp==2025.04.1
+youtube-transcript-api==0.6.0
+Pillow==9.4.0
