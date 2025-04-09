@@ -11,7 +11,7 @@ intents.message_content = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 
 # Clé API YouTube (remplace par la tienne)
-API_KEY = 'API_YT'
+API_KEY = API_YT
 CHANNEL_ID = 'UCqHw1XAOi4QZQ4M7n6jFdHg'  # ID de la chaîne YouTube de Blazx
 TEXT_CHANNEL_ID = 1357601068921651203  # ID du salon Discord où la vidéo sera envoyée
 
