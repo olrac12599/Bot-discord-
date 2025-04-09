@@ -1,28 +1,16 @@
 import os
 import discord
 from discord.ext import commands, tasks
-import googleapiclient.discovery
 import asyncio
 import time
-from discord.ext import commands
+import requests
 from PIL import Image
 import io
-from bs4 import BeautifulSoup
-from yt_dlp import YoutubeDL
-from youtube_transcript_api import YouTubeTranscriptApi, TranscriptsDisabled, NoTranscriptFound
 from datetime import datetime
 
 intents = discord.Intents.default()
 intents.message_content = True
 bot = commands.Bot(command_prefix="!", intents=intents)
-
-
-@bot.event
-async def on_ready():
-    print(f"✅ Connecté en tant que {bot.user}")
-    await send_latest_youtube_videos()
-    bot.loop.create_task(check_new_videos())
-    bot.loop.create_task(update_stream_notifications())
 
 TOKEN_DISCORD = os.environ['TOKEN_DISCORD']
 CLIENT_ID = os.environ['CLIENT_ID']
@@ -52,8 +40,6 @@ def get_live_streams(user_id):
 @bot.event
 async def on_ready():
     print(f"✅ Connecté en tant que {bot.user}")
-    await send_latest_youtube_videos()
-    bot.loop.create_task(check_new_videos())
     bot.loop.create_task(update_stream_notifications())
 
 async def update_stream_notifications():
