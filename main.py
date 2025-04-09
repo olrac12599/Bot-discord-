@@ -55,24 +55,31 @@ async def on_ready():
 async def cherche(ctx, url, *, phrase):
     await ctx.send("Recherche en cours...")
 
-    # Dates à utiliser pour la recherche
+    # Dates à utiliser pour la recherche (du 11 décembre 2024 jusqu'à aujourd'hui)
     start_date = to_date("2024-12-11")
-    end_date = to_date("2025-04-09")
+    end_date = datetime.now()  # La date actuelle
 
     videos = get_videos_from_channel(url)
 
     count = 0
     for video in videos:
-        video_date = datetime.strptime(video['upload_date'], "%Y%m%d")
-        if start_date <= video_date <= end_date:
-            video_id = video['url'].split('v=')[-1]
-            results = search_in_subtitles(video_id, phrase)
-            if results:
-                count += 1
-                await ctx.send(f"\n**{video['title']}**\nhttps://www.youtube.com/watch?v={video_id}")
-                for res in results:
-                    time = int(res['start'])
-                    await ctx.send(f"> À {time//60}:{time%60:02d} — {res['text']}")
+        # Vérifie si la clé 'upload_date' existe
+        if 'upload_date' in video:
+            try:
+                video_date = datetime.strptime(video['upload_date'], "%Y%m%d")
+                if start_date <= video_date <= end_date:
+                    video_id = video['url'].split('v=')[-1]
+                    results = search_in_subtitles(video_id, phrase)
+                    if results:
+                        count += 1
+                        await ctx.send(f"\n**{video['title']}**\nhttps://www.youtube.com/watch?v={video_id}")
+                        for res in results:
+                            time = int(res['start'])
+                            await ctx.send(f"> À {time//60}:{time%60:02d} — {res['text']}")
+            except ValueError:
+                continue  # Ignore les vidéos avec un format de date incorrect
+        else:
+            continue  # Ignore les vidéos sans 'upload_date'
 
     if count == 0:
         await ctx.send("Aucun résultat trouvé.")
