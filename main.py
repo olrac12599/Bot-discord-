@@ -71,4 +71,4 @@ async def cherche(ctx, url, *, phrase):
         await ctx.send("Aucun résultat trouvé.")
 
 # Lance le bot
-bot.run("TON_TOKEN_ICI")
+bot.run(TOKEN_DISCORD )
