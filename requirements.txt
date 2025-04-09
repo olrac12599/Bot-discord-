@@ -1,6 +1,7 @@
 discord.py
 requests
-beautifulsoup4
-yt-dlp
 youtube-transcript-api
+yt-dlp
+beautifulsoup4
 Pillow
+google-api-python-client
