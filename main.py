@@ -12,6 +12,14 @@ from yt_dlp import YoutubeDL
 from youtube_transcript_api import YouTubeTranscriptApi, TranscriptsDisabled, NoTranscriptFound
 from datetime import datetime
 
+intents = discord.Intents.default()
+intents.message_content = True
+bot = commands.Bot(command_prefix="!", intents=intents)
+
+bot.event
+async def on_ready():
+    print(f"Connecté en tant que {bot.user}")
+
 # Paramètres de Twitch
 TOKEN_DISCORD = os.environ['TOKEN_DISCORD']
 CLIENT_ID = os.environ['CLIENT_ID']
