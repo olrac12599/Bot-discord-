@@ -1,91 +1,55 @@
-from yt_dlp import YoutubeDL
-from youtube_transcript_api import YouTubeTranscriptApi, TranscriptsDisabled, NoTranscriptFound
-from datetime import datetime
 import discord
 from discord.ext import commands
+from youtube_transcript_api import YouTubeTranscriptApi, TranscriptsDisabled, NoTranscriptFound
 import os
 
-# Récupère le token Discord depuis les variables d'environnement
-TOKEN_DISCORD = os.getenv('TOKEN_DISCORD')
+# Configuration du bot
+TOKEN_DISCORD = os.getenv('DISCORD_TOKEN')  # Récupère le token depuis les variables d'environnement
+intents = discord.Intents.default()
+intents.message_content = True  # Assure-toi que l'intent pour le contenu des messages est activé
 
-# Définir les intentions (permissions que le bot peut utiliser)
-intents = discord.Intents.default()  # Par défaut, les intentions minimales sont activées
-intents.messages = True  # S'assurer que le bot peut lire les messages
-intents.message_content = True  # Activer l'intention pour le contenu des messages (nécessaire)
-
-# Fonction pour convertir une chaîne de date en datetime
-def to_date(date_str):
-    return datetime.strptime(date_str, "%Y-%m-%d")
-
-# Récupère les vidéos de la chaîne
-def get_videos_from_channel(channel_url):
-    ydl_opts = {
-        'extract_flat': True,
-        'quiet': False,  # Mettre 'False' pour voir les informations pendant l'extraction
-        'force_generic_extractor': True,
-    }
-    with YoutubeDL(ydl_opts) as ydl:
-        info = ydl.extract_info(channel_url, download=False)
-        return info.get('entries', [])
-
-# Cherche la phrase dans les sous-titres
-def search_in_subtitles(video_id, phrase):
-    try:
-        transcript = YouTubeTranscriptApi.get_transcript(video_id, languages=['fr', 'en'])
-        results = []
-        for entry in transcript:
-            if phrase.lower() in entry['text'].lower():
-                results.append({
-                    'start': entry['start'],
-                    'text': entry['text']
-                })
-        return results
-    except (TranscriptsDisabled, NoTranscriptFound) as e:
-        print(f"[DEBUG] No transcript found for video {video_id}: {e}")
-        return []
-
-# === MAIN ===
-# Initialisation du bot avec les intentions
 bot = commands.Bot(command_prefix="!", intents=intents)
 
-@bot.event
-async def on_ready():
-    print(f"Connecté en tant que {bot.user}")
+# Fonction pour extraire l'ID de la vidéo à partir de l'URL
+def get_video_id(url):
+    if "youtube.com/watch?v=" in url:
+        return url.split("v=")[-1]
+    return None
 
+# Fonction pour rechercher la phrase dans les sous-titres
+def search_in_subtitles(video_id, phrase):
+    try:
+        # Récupérer les sous-titres de la vidéo
+        transcript = YouTubeTranscriptApi.get_transcript(video_id, languages=['fr', 'en'])
+
+        results = []
+        # Chercher la phrase dans les sous-titres
+        for entry in transcript:
+            if phrase.lower() in entry['text'].lower():
+                time = int(entry['start'])
+                results.append(f"À {time//60}:{time%60:02d} — {entry['text']}")
+        
+        return results
+    except (TranscriptsDisabled, NoTranscriptFound):
+        return ["Sous-titres non disponibles pour cette vidéo."]
+    except Exception as e:
+        return [f"Erreur: {str(e)}"]
+
+# Commande Discord
 @bot.command()
-async def cherche(ctx, url, *, phrase):
-    await ctx.send("Recherche en cours...")
-
-    # Dates à utiliser pour la recherche (du 11 décembre 2024 jusqu'à aujourd'hui)
-    start_date = to_date("2024-12-11")
-    end_date = datetime.now()  # La date actuelle
-
-    videos = get_videos_from_channel(url)
-
-    count = 0
-    for video in videos:
-        # Vérifie si la clé 'upload_date' existe
-        if 'upload_date' in video:
-            try:
-                video_date = datetime.strptime(video['upload_date'], "%Y%m%d")
-                print(f"[DEBUG] Vidéo trouvée: {video['title']} | Date: {video_date}")
-                if start_date <= video_date <= end_date:
-                    video_id = video['url'].split('v=')[-1]
-                    print(f"[DEBUG] Recherche des sous-titres pour la vidéo: {video_id}")
-                    results = search_in_subtitles(video_id, phrase)
-                    if results:
-                        count += 1
-                        await ctx.send(f"\n**{video['title']}**\nhttps://www.youtube.com/watch?v={video_id}")
-                        for res in results:
-                            time = int(res['start'])
-                            await ctx.send(f"> À {time//60}:{time%60:02d} — {res['text']}")
-            except ValueError:
-                continue  # Ignore les vidéos avec un format de date incorrect
-        else:
-            continue  # Ignore les vidéos sans 'upload_date'
-
-    if count == 0:
+async def yt(ctx, url: str, *, phrase: str):
+    video_id = get_video_id(url)
+    if not video_id:
+        await ctx.send("URL invalide. Assure-toi que c'est un lien YouTube valide.")
+        return
+    
+    # Recherche des sous-titres
+    results = search_in_subtitles(video_id, phrase)
+    
+    if results:
+        await ctx.send("\n".join(results))
+    else:
         await ctx.send("Aucun résultat trouvé.")
 
-# Lance le bot
+# Lancer le bot
 bot.run(TOKEN_DISCORD)
