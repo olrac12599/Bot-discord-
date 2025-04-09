@@ -5,7 +5,8 @@ import discord
 from discord.ext import commands
 import os
 
-TOKEN_DISCORD= os.getenv('TOKEN_DISCORD')
+# Récupère le token Discord depuis les variables d'environnement
+TOKEN_DISCORD = os.getenv('TOKEN_DISCORD')
 
 # Fonction pour convertir une chaîne de date en datetime
 def to_date(date_str):
@@ -71,4 +72,4 @@ async def cherche(ctx, url, *, phrase):
         await ctx.send("Aucun résultat trouvé.")
 
 # Lance le bot
-bot.run(TOKEN_DISCORD )
+bot.run(TOKEN_DISCORD)
