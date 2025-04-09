@@ -12,6 +12,39 @@ intents = discord.Intents.default()
 intents.message_content = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 
+#recherche phrase dans youtube
+
+@bot.event
+async def on_ready():
+    print(f"Connecté en tant que {bot.user}")
+
+@bot.command()
+async def cherche(ctx, url, *, phrase):
+    await ctx.send("Recherche en cours...")
+
+    # Ici tu mets les dates en dur (ou les demandes dans une autre commande)
+    start_date = to_date("2024-12-11")
+    end_date = to_date("2025-04-09")
+
+    videos = get_videos_from_channel(url)
+
+    count = 0
+    for video in videos:
+        video_date = datetime.strptime(video['upload_date'], "%Y%m%d")
+        if start_date <= video_date <= end_date:
+            video_id = video['url'].split('v=')[-1]
+            results = search_in_subtitles(video_id, phrase)
+            if results:
+                count += 1
+                await ctx.send(f"\n**{video['title']}**\nhttps://www.youtube.com/watch?v={video_id}")
+                for res in results:
+                    time = int(res['start'])
+                    await ctx.send(f"> À {time//60}:{time%60:02d} — {res['text']}")
+
+    if count == 0:
+        await ctx.send("Aucun résultat trouvé.")
+
+
 # Liste des chaînes YouTube à surveiller : Nom affiché -> Handle
 STREAMERS_YT = {
     "Squeezie": "@Squeezie",
