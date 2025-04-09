@@ -1,6 +1,7 @@
 import discord
 from discord.ext import commands
 from youtube_transcript_api import YouTubeTranscriptApi, TranscriptsDisabled, NoTranscriptFound
+from fuzzywuzzy import fuzz  # Recherche approximative
 import os
 
 # Configuration du bot
@@ -20,18 +21,19 @@ def get_video_id(url):
         return url.split("youtu.be/")[-1].split("?")[0]  # Supprimer les paramètres supplémentaires
     return None
 
-# Fonction pour rechercher la phrase dans les sous-titres
+# Fonction pour rechercher la phrase dans les sous-titres avec une recherche approximative
 def search_in_subtitles(video_id, phrase):
     try:
-        # Récupérer les sous-titres de la vidéo
-        transcript = YouTubeTranscriptApi.get_transcript(video_id, languages=['fr', 'en'])
+        # Récupérer les sous-titres de la vidéo (en plusieurs langues possibles)
+        transcript = YouTubeTranscriptApi.get_transcript(video_id, languages=['fr', 'en', 'es', 'de'])
 
         results = []
         # Chercher la phrase dans les sous-titres
         for entry in transcript:
-            if phrase.lower() in entry['text'].lower():
+            score = fuzz.ratio(phrase.lower(), entry['text'].lower())  # Recherche approximative
+            if score > 80:  # Si la correspondance est supérieure à 80%
                 time = int(entry['start'])
-                results.append(f"À {time//60}:{time%60:02d} — {entry['text']}")
+                results.append(f"À {time//60}:{time%60:02d} — {entry['text']} (score: {score}%)")
         
         return results
     except (TranscriptsDisabled, NoTranscriptFound):
