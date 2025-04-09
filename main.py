@@ -7,6 +7,10 @@ from discord.ext import commands
 from PIL import Image
 import io
 from bs4 import BeautifulSoup
+from yt_dlp import YoutubeDL
+from youtube_transcript_api import YouTubeTranscriptApi, TranscriptsDisabled, NoTranscriptFound
+from datetime import datetime
+
 
 intents = discord.Intents.default()
 intents.message_content = True
