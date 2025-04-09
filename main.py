@@ -5,7 +5,7 @@ import discord
 from discord.ext import commands
 import os
 
-TOKEN_DISCORD= os.dotenv('TOKEN_DISCORD')
+TOKEN_DISCORD= os.getenv('TOKEN_DISCORD')
 
 # Fonction pour convertir une chaîne de date en datetime
 def to_date(date_str):
