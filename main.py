@@ -4,7 +4,7 @@ from youtube_transcript_api import YouTubeTranscriptApi, TranscriptsDisabled, No
 import os
 
 # Configuration du bot
-TOKEN_DISCORD = os.getenv('DISCORD_TOKEN')  # Récupère le token depuis les variables d'environnement
+TOKEN_DISCORD = os.getenv('TOKEN_DISCORD')  # Récupère le token depuis les variables d'environnement
 intents = discord.Intents.default()
 intents.message_content = True  # Assure-toi que l'intent pour le contenu des messages est activé
 
