@@ -56,7 +56,7 @@ async def cherche(ctx, url, *, phrase):
     await ctx.send("Recherche en cours...")
 
     # Dates à utiliser pour la recherche (du 11 décembre 2024 jusqu'à aujourd'hui)
-    start_date = to_date("2024-12-11")
+    start_date = to_date("2025-4-9")
     end_date = datetime.now()  # La date actuelle
 
     videos = get_videos_from_channel(url)
