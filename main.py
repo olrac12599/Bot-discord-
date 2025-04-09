@@ -17,11 +17,13 @@ intents.message_content = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 
 
-bot.event
+@bot.event
 async def on_ready():
-    print(f"Connecté en tant que {bot.user}")
+    print(f"✅ Connecté en tant que {bot.user}")
+    await send_latest_youtube_videos()
+    bot.loop.create_task(check_new_videos())
+    bot.loop.create_task(update_stream_notifications())
 
-# Paramètres de Twitch
 TOKEN_DISCORD = os.environ['TOKEN_DISCORD']
 CLIENT_ID = os.environ['CLIENT_ID']
 ACCESS_TOKEN = os.environ['ACCESS_TOKEN']
