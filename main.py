@@ -11,6 +11,7 @@ TOKEN_DISCORD = os.getenv('TOKEN_DISCORD')
 # Définir les intentions (permissions que le bot peut utiliser)
 intents = discord.Intents.default()  # Par défaut, les intentions minimales sont activées
 intents.messages = True  # S'assurer que le bot peut lire les messages
+intents.message_content = True  # Activer l'intention pour le contenu des messages (nécessaire)
 
 # Fonction pour convertir une chaîne de date en datetime
 def to_date(date_str):
