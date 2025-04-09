@@ -8,6 +8,10 @@ import os
 # Récupère le token Discord depuis les variables d'environnement
 TOKEN_DISCORD = os.getenv('TOKEN_DISCORD')
 
+# Définir les intentions (permissions que le bot peut utiliser)
+intents = discord.Intents.default()  # Par défaut, les intentions minimales sont activées
+intents.messages = True  # S'assurer que le bot peut lire les messages
+
 # Fonction pour convertir une chaîne de date en datetime
 def to_date(date_str):
     return datetime.strptime(date_str, "%Y-%m-%d")
@@ -39,7 +43,8 @@ def search_in_subtitles(video_id, phrase):
         return []
 
 # === MAIN ===
-bot = commands.Bot(command_prefix="!")
+# Initialisation du bot avec les intentions
+bot = commands.Bot(command_prefix="!", intents=intents)
 
 @bot.event
 async def on_ready():
