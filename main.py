@@ -17,7 +17,7 @@ CLIENT_ID = os.environ['CLIENT_ID']
 ACCESS_TOKEN = os.environ['ACCESS_TOKEN']
 TEXT_NOTIFY_CHANNEL_ID = 1357601068921651203
 
-STREAMERS_CIBLES = {"fugu_fps", "tobias", "blazx", "lamatrak", "Aneyaris_", "anyme023"}
+STREAMERS_CIBLES = {"didiiana_","jolavanille","fugu_fps", "tobias", "blazx", "lamatrak", "Aneyaris_", "anyme023"}
 streamers_dynamique = set()
 notified_message_id = None
 empty_message_id = None
