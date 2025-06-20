@@ -1,101 +1,35 @@
 import os
 import discord
-from discord.ext import commands, tasks
+from discord.ext import commands
 import asyncio
 import time
 import requests
 from PIL import Image
 import io
-from datetime import datetime
-from twitchio.ext import commands
 
+# --- Configuration --- #
+DISCORD_CHANNEL_ID = 1385713609161707631
+TEXT_NOTIFY_CHANNEL_ID = 1357601068921651203
+TWITCH_NICK = "17_tb_carlo"
+CHANNELS_TO_JOIN = ["blazx"]
 
-
-DISCORD_CHANNEL_ID = 1385713609161707631   # L'ID du canal où envoyer les notifications
-
-# --- Configuration Twitch --- #
-TWITCH_NICK = "17_tb_carlo"  # Le nom d'utilisateur à mentionner
-CHANNELS_TO_JOIN = ["blazx"]  # Liste des chaînes à surveiller
-
-# Initialisation du client Discord
-intents = discord.Intents.default()
-intents.messages = True
-discord_client = discord.Client(intents=intents)
-
-# Initialisation du bot Twitch
-twitch_bot = commands.Bot(
-    token=TWITCH_ACCESS_TOKEN,
-    prefix="!",  # Le préfixe n'est pas utilisé ici, mais est requis
-    initial_channels=CHANNELS_TO_JOIN,
-)
-
-@twitch_bot.event
-async def event_ready():
-    """
-    S'exécute une fois que le bot Twitch est prêt.
-    """
-    print(f"Bot Twitch connecté en tant que | {twitch_bot.nick}")
-
-@twitch_bot.event
-async def event_message(message):
-    """
-    S'exécute à chaque message reçu dans les chats Twitch surveillés.
-    """
-    # Ignore les messages envoyés par le bot lui-même
-    if message.echo:
-        return
-
-    # Vérifie si votre nom d'utilisateur est mentionné dans le message
-    if f"@{TWITCH_NICK.lower()}" in message.content.lower():
-        # Récupère le canal Discord
-        discord_channel = discord_client.get_channel(DISCORD_CHANNEL_ID)
-
-        if discord_channel:
-            # Crée un message intégré (embed) pour une meilleure lisibilité
-            embed = discord.Embed(
-                title=f"Nouvelle mention sur Twitch !",
-                description=f"**Streamer :** `{message.channel.name}`\n"
-                            f"**Auteur du message :** `{message.author.name}`\n"
-                            f"**Message :**\n>>> {message.content}",
-                color=discord.Color.purple()
-            )
-            # Envoie le message sur le canal Discord
-            await discord_channel.send(embed=embed)
-
-async def main():
-    """
-    Fonction principale pour lancer les deux bots.
-    """
-    await asyncio.gather(
-        twitch_bot.start(),
-        discord_client.start(DISCORD_BOT_TOKEN)
-    )
-
-if __name__ == "__main__":
-    # Récupère la boucle d'événements existante ou en crée une nouvelle
-    try:
-        loop = asyncio.get_running_loop()
-    except RuntimeError:
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-
-    # Lance la fonction principale
-    loop.run_until_complete(main())
-
-intents = discord.Intents.default()
-intents.message_content = True
-bot = commands.Bot(command_prefix="!", intents=intents)
-
+# --- Clés d'environnement --- #
 TOKEN_DISCORD = os.environ['TOKEN_DISCORD']
 CLIENT_ID = os.environ['CLIENT_ID']
 ACCESS_TOKEN = os.environ['ACCESS_TOKEN']
-TEXT_NOTIFY_CHANNEL_ID = 1357601068921651203
 
-STREAMERS_CIBLES = {"didiiana_","jolavanille","fugu_fps", "tobias", "blazx", "lamatrak", "Aneyaris_", "anyme023"}
+# --- Streamers --- #
+STREAMERS_CIBLES = {"didiiana_", "jolavanille", "fugu_fps", "tobias", "blazx", "lamatrak", "Aneyaris_", "anyme023"}
 streamers_dynamique = set()
 notified_message_id = None
 empty_message_id = None
 
+# --- Discord Bot --- #
+intents = discord.Intents.default()
+intents.message_content = True
+bot = commands.Bot(command_prefix="!", intents=intents)
+
+# --- Fonctions Twitch --- #
 def get_user_id():
     headers = {'Client-ID': CLIENT_ID, 'Authorization': f'Bearer {ACCESS_TOKEN}'}
     response = requests.get("https://api.twitch.tv/helix/users", headers=headers)
@@ -111,6 +45,7 @@ def get_live_streams(user_id):
         return response.json().get("data", [])
     return []
 
+# --- Notifications Discord --- #
 async def update_stream_notifications():
     await bot.wait_until_ready()
     user_id = get_user_id()
@@ -207,6 +142,7 @@ async def update_stream_notifications():
 
         await asyncio.sleep(10)
 
+# --- Commandes Discord --- #
 @bot.command()
 async def a(ctx, streamer: str):
     streamers_dynamique.add(streamer.lower())
@@ -223,5 +159,7 @@ async def r(ctx, streamer: str):
 async def all(ctx):
     await ctx.channel.purge()
     await ctx.send("🧹 **Le salon a été nettoyé !**", delete_after=3)
- 
+
+# --- Lancement --- #
+bot.loop.create_task(update_stream_notifications())
 bot.run(TOKEN_DISCORD)
