@@ -7,6 +7,80 @@ import requests
 from PIL import Image
 import io
 from datetime import datetime
+from twitchio.ext import commands
+
+
+
+DISCORD_CHANNEL_ID = 1385713609161707631   # L'ID du canal où envoyer les notifications
+
+# --- Configuration Twitch --- #
+TWITCH_NICK = "17_tb_carlo"  # Le nom d'utilisateur à mentionner
+CHANNELS_TO_JOIN = ["blazx"]  # Liste des chaînes à surveiller
+
+# Initialisation du client Discord
+intents = discord.Intents.default()
+intents.messages = True
+discord_client = discord.Client(intents=intents)
+
+# Initialisation du bot Twitch
+twitch_bot = commands.Bot(
+    token=TWITCH_ACCESS_TOKEN,
+    prefix="!",  # Le préfixe n'est pas utilisé ici, mais est requis
+    initial_channels=CHANNELS_TO_JOIN,
+)
+
+@twitch_bot.event
+async def event_ready():
+    """
+    S'exécute une fois que le bot Twitch est prêt.
+    """
+    print(f"Bot Twitch connecté en tant que | {twitch_bot.nick}")
+
+@twitch_bot.event
+async def event_message(message):
+    """
+    S'exécute à chaque message reçu dans les chats Twitch surveillés.
+    """
+    # Ignore les messages envoyés par le bot lui-même
+    if message.echo:
+        return
+
+    # Vérifie si votre nom d'utilisateur est mentionné dans le message
+    if f"@{TWITCH_NICK.lower()}" in message.content.lower():
+        # Récupère le canal Discord
+        discord_channel = discord_client.get_channel(DISCORD_CHANNEL_ID)
+
+        if discord_channel:
+            # Crée un message intégré (embed) pour une meilleure lisibilité
+            embed = discord.Embed(
+                title=f"Nouvelle mention sur Twitch !",
+                description=f"**Streamer :** `{message.channel.name}`\n"
+                            f"**Auteur du message :** `{message.author.name}`\n"
+                            f"**Message :**\n>>> {message.content}",
+                color=discord.Color.purple()
+            )
+            # Envoie le message sur le canal Discord
+            await discord_channel.send(embed=embed)
+
+async def main():
+    """
+    Fonction principale pour lancer les deux bots.
+    """
+    await asyncio.gather(
+        twitch_bot.start(),
+        discord_client.start(DISCORD_BOT_TOKEN)
+    )
+
+if __name__ == "__main__":
+    # Récupère la boucle d'événements existante ou en crée une nouvelle
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+
+    # Lance la fonction principale
+    loop.run_until_complete(main())
 
 intents = discord.Intents.default()
 intents.message_content = True
@@ -36,11 +110,6 @@ def get_live_streams(user_id):
     if response.status_code == 200:
         return response.json().get("data", [])
     return []
-
-@bot.event
-async def on_ready():
-    print(f"✅ Connecté en tant que {bot.user}")
-    bot.loop.create_task(update_stream_notifications())
 
 async def update_stream_notifications():
     await bot.wait_until_ready()
