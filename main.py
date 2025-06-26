@@ -1,166 +1,127 @@
-import os
 import discord
 from discord.ext import commands, tasks
 import requests
-from PIL import Image
-import io
-import time
+import os
+# La ligne "from dotenv import load_dotenv" a été SUPPRIMÉE.
 
-# --- Configuration --- #
-# Il est recommandé de stocker ces informations dans des variables d'environnement
-TOKEN_DISCORD = os.environ['TOKEN_DISCORD']
-CLIENT_ID = os.environ['CLIENT_ID']
-ACCESS_TOKEN = os.environ['ACCESS_TOKEN']
+# --- CONFIGURATION INITIALE ---
+# La ligne "load_dotenv()" a été SUPPRIMÉE.
 
-# ID du salon où envoyer les notifications de live
-TEXT_NOTIFY_CHANNEL_ID = 1357601068921651203 
+# On lit directement les variables d'environnement qui sont fournies par Railway.
+# C'est exactement ce que "getenv" (get environment variable) veut dire.
+DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
+TWITCH_CLIENT_ID = os.getenv("TWITCH_CLIENT_ID")
+TWITCH_TOKEN = os.getenv("TWITCH_TOKEN")
 
-# Liste statique des streamers à suivre. Peut être modifiée par les commandes !a et !r
-STREAMERS_CIBLES = {"didiiana_","jolavanille","fugu_fps", "tobias", "blazx", "lamatrak", "Aneyaris_", "anyme023"}
+# --- VÉRIFICATION DES VARIABLES (TRÈS IMPORTANT) ---
+# On vérifie que les variables ont bien été trouvées dans l'environnement de Railway.
+if not all([DISCORD_TOKEN, TWITCH_CLIENT_ID, TWITCH_TOKEN]):
+    # Si une des variables manque, le bot ne peut pas démarrer.
+    # On lève une erreur pour que les logs de Railway montrent clairement le problème.
+    raise ValueError("Une ou plusieurs variables d'environnement sont manquantes (DISCORD_TOKEN, TWITCH_CLIENT_ID, TWITCH_TOKEN).")
 
-# --- Initialisation du bot Discord --- #
+
+# Configuration des "Intents" pour le bot Discord
 intents = discord.Intents.default()
-intents.message_content = True  # Nécessaire pour lire le contenu des messages pour les commandes
+intents.message_content = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 
-# --- Variables globales pour le suivi d'état --- #
-streamers_dynamique = set()
-notified_message_id = None
-empty_message_id = None
+# (Le reste du code est absolument identique à la version précédente)
 
-# --- Fonctions pour l'API Twitch --- #
-def get_user_id():
-    """Récupère l'ID de l'utilisateur Twitch associé au token d'accès."""
-    headers = {'Client-ID': CLIENT_ID, 'Authorization': f'Bearer {ACCESS_TOKEN}'}
-    try:
-        response = requests.get("https://api.twitch.tv/helix/users", headers=headers)
-        response.raise_for_status()  # Lève une exception pour les codes d'erreur HTTP
-        return response.json()["data"][0]["id"]
-    except requests.RequestException as e:
-        print(f"Erreur lors de la récupération de l'user ID Twitch : {e}")
-        return None
+# --- STOCKAGE DES ALERTES ---
+alerts = []
+streamer_id_cache = {}
 
-def get_live_streams(user_id):
-    """Récupère les streams en live parmi les chaînes suivies par l'utilisateur."""
-    url = f"https://api.twitch.tv/helix/streams/followed?user_id={user_id}"
-    headers = {"Client-ID": CLIENT_ID, "Authorization": f'Bearer {ACCESS_TOKEN}'}
-    try:
-        response = requests.get(url, headers=headers)
-        response.raise_for_status()
-        return response.json().get("data", [])
-    except requests.RequestException as e:
-        print(f"Erreur lors de la récupération des streams live : {e}")
-        return []
+# --- FONCTIONS UTILITAIRES TWITCH ---
+async def get_streamer_id(streamer_name):
+    if streamer_name in streamer_id_cache:
+        return streamer_id_cache[streamer_name]
 
-# --- Tâche de fond pour vérifier les lives --- #
-@tasks.loop(seconds=10)
-async def update_stream_notifications():
-    global notified_message_id, empty_message_id
+    headers = {"Client-ID": TWITCH_CLIENT_ID, "Authorization": f"Bearer {TWITCH_TOKEN}"}
+    params = {"login": streamer_name.lower()}
+    response = requests.get("https://api.twitch.tv/helix/users", headers=headers, params=params)
     
-    user_id = get_user_id()
-    if not user_id:
-        print("Vérification annulée : Impossible de récupérer l'ID utilisateur Twitch.")
-        return
+    if response.status_code == 200:
+        data = response.json()
+        if data["data"]:
+            user_id = data["data"][0]["id"]
+            streamer_id_cache[streamer_name] = user_id
+            return user_id
+    # Gestion de l'expiration du token
+    elif response.status_code == 401:
+        print("ERREUR: Le token Twitch a probablement expiré. Veuillez en générer un nouveau.")
+    return None
 
-    live_streams = get_live_streams(user_id)
-    live_info = {stream["user_login"].lower(): stream for stream in live_streams}
+async def get_stream_status(streamer_id):
+    headers = {"Client-ID": TWITCH_CLIENT_ID, "Authorization": f"Bearer {TWITCH_TOKEN}"}
+    params = {"user_id": streamer_id}
+    response = requests.get("https://api.twitch.tv/helix/streams", headers=headers, params=params)
     
-    # Combine la liste statique et la liste dynamique ajoutée par les commandes
-    streamers_a_surveiller = STREAMERS_CIBLES.union(streamers_dynamique)
-    live_now = streamers_a_surveiller.intersection(live_info.keys())
+    if response.status_code == 200:
+        data = response.json()
+        if data["data"]:
+            return data["data"][0]
+    return None
+
+# --- COMMANDES DU BOT ---
+@bot.command(name="ping")
+async def ping(ctx, category: str, streamer: str):
+    streamer_name_lower = streamer.lower()
+    category_name_lower = category.lower()
+
+    for alert in alerts:
+        if alert['streamer'] == streamer_name_lower and \
+           alert['category'] == category_name_lower and \
+           alert['author_id'] == ctx.author.id:
+            await ctx.send(f"Vous avez déjà une alerte active pour **{streamer}** dans la catégorie **{category}**.")
+            return
+
+    new_alert = {
+        "streamer": streamer_name_lower,
+        "category": category_name_lower,
+        "channel_id": ctx.channel.id,
+        "author_id": ctx.author.id,
+        "last_status": False
+    }
+    alerts.append(new_alert)
+    await ctx.send(f"✅ Alerte créée ! Je vous préviendrai si **{streamer}** lance un live sur **{category}**.")
+
+# --- TÂCHE DE FOND ---
+@tasks.loop(minutes=1)
+async def check_streams():
+    print(f"Vérification des streams en cours... {len(alerts)} alerte(s) active(s).")
     
-    text_channel = bot.get_channel(TEXT_NOTIFY_CHANNEL_ID)
-    if not text_channel:
-        print(f"Erreur : le salon avec l'ID {TEXT_NOTIFY_CHANNEL_ID} est introuvable.")
-        return
+    for alert in alerts:
+        streamer_id = await get_streamer_id(alert['streamer'])
+        if not streamer_id:
+            continue 
 
-    # Logique pour afficher/mettre à jour l'embed des streamers en live
-    if live_now:
-        if empty_message_id:
-            try:
-                empty_msg = await text_channel.fetch_message(empty_message_id)
-                await empty_msg.delete()
-                empty_message_id = None
-            except discord.NotFound:
-                empty_message_id = None
-
-        embed = discord.Embed(
-            title="🎥 Streamers en Live",
-            color=0x9146FF, # Couleur violette de Twitch
-            description="🔥 Voici les streamers actuellement en live !"
-        )
+        stream_info = await get_stream_status(streamer_id)
         
-        for streamer_login in live_now:
-            info = live_info[streamer_login]
-            embed.add_field(
-                name=f"🔴 {info['user_name']}",
-                value=(
-                    f"🎮 **Jeu :** {info['game_name']}\n"
-                    f"📖 **Titre :** {info['title']}\n"
-                    f"👥 {info['viewer_count']} spectateurs\n"
-                    f"[▶️ **Regarder**](https://twitch.tv/{streamer_login})"
-                ),
-                inline=True
-            )
+        is_live_in_category = False
+        if stream_info:
+            current_category = stream_info.get("game_name", "").lower()
+            if alert['category'] in current_category:
+                is_live_in_category = True
         
-        embed.set_footer(text=f"Mis à jour le {time.strftime('%d/%m/%Y à %H:%M:%S')}")
+        if is_live_in_category and not alert['last_status']:
+            channel = bot.get_channel(alert['channel_id'])
+            if channel:
+                user = await bot.fetch_user(alert['author_id'])
+                message = (
+                    f"🔔 **ALERTE** 🔔\n"
+                    f"{user.mention}, le streamer **{alert['streamer'].capitalize()}** vient de lancer un live dans la catégorie **{stream_info['game_name']}** !\n"
+                    f"Titre : {stream_info['title']}\n"
+                    f"https://www.twitch.tv/{alert['streamer']}"
+                )
+                await channel.send(message)
         
-        if notified_message_id:
-            try:
-                msg = await text_channel.fetch_message(notified_message_id)
-                await msg.edit(embed=embed)
-            except discord.NotFound:
-                msg = await text_channel.send(embed=embed)
-                notified_message_id = msg.id
-        else:
-            msg = await text_channel.send(embed=embed)
-            notified_message_id = msg.id
+        alert['last_status'] = is_live_in_category
 
-    # Logique pour afficher qu'aucun streamer n'est en live
-    else:
-        if notified_message_id:
-            try:
-                msg = await text_channel.fetch_message(notified_message_id)
-                await msg.delete()
-                notified_message_id = None
-            except discord.NotFound:
-                notified_message_id = None
-
-        if not empty_message_id:
-            try:
-                empty_msg = await text_channel.send("❌ **Personne n'est en live actuellement.**")
-                empty_message_id = empty_msg.id
-            except discord.HTTPException as e:
-                print(f"Impossible d'envoyer le message 'personne en live': {e}")
-
-
-# --- Événements et Commandes Discord --- #
+# --- DÉMARRAGE DU BOT ---
 @bot.event
 async def on_ready():
-    """S'exécute une fois que le bot est connecté et prêt."""
-    print(f'Connecté en tant que {bot.user}')
-    if not update_stream_notifications.is_running():
-        update_stream_notifications.start()
+    print(f'Connecté en tant que {bot.user.name}')
+    check_streams.start()
 
-@bot.command(name='a')
-async def add_streamer(ctx, streamer: str):
-    """Ajoute un streamer à la liste de surveillance dynamique."""
-    streamers_dynamique.add(streamer.lower())
-    await ctx.message.delete()
-    await ctx.send(f"✅ **{streamer}** a été ajouté à la liste des notifications.", delete_after=5)
-
-@bot.command(name='r')
-async def remove_streamer(ctx, streamer: str):
-    """Retire un streamer de la liste de surveillance dynamique."""
-    streamers_dynamique.discard(streamer.lower())
-    await ctx.message.delete()
-    await ctx.send(f"❌ **{streamer}** a été retiré de la liste des notifications.", delete_after=5)
-
-@bot.command(name='all')
-async def purge_channel(ctx):
-    """Nettoie le salon (supprime tous les messages)."""
-    await ctx.channel.purge()
-    await ctx.send("🧹 **Le salon a été nettoyé !**", delete_after=3)
-
-# --- Lancement du bot --- #
-bot.run(TOKEN_DISCORD)
+bot.run(DISCORD_TOKEN)
