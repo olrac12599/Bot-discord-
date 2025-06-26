@@ -1,127 +1,169 @@
 import discord
 from discord.ext import commands, tasks
+from discord import app_commands
 import requests
 import os
-# La ligne "from dotenv import load_dotenv" a été SUPPRIMÉE.
+import asyncio
 
-# --- CONFIGURATION INITIALE ---
-# La ligne "load_dotenv()" a été SUPPRIMÉE.
-
-# On lit directement les variables d'environnement qui sont fournies par Railway.
-# C'est exactement ce que "getenv" (get environment variable) veut dire.
+# --- 1. CONFIGURATION ---
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
 TWITCH_CLIENT_ID = os.getenv("TWITCH_CLIENT_ID")
 TWITCH_TOKEN = os.getenv("TWITCH_TOKEN")
 
-# --- VÉRIFICATION DES VARIABLES (TRÈS IMPORTANT) ---
-# On vérifie que les variables ont bien été trouvées dans l'environnement de Railway.
 if not all([DISCORD_TOKEN, TWITCH_CLIENT_ID, TWITCH_TOKEN]):
-    # Si une des variables manque, le bot ne peut pas démarrer.
-    # On lève une erreur pour que les logs de Railway montrent clairement le problème.
-    raise ValueError("Une ou plusieurs variables d'environnement sont manquantes (DISCORD_TOKEN, TWITCH_CLIENT_ID, TWITCH_TOKEN).")
+    raise ValueError("ERREUR CRITIQUE: Variables d'environnement manquantes.")
 
-
-# Configuration des "Intents" pour le bot Discord
 intents = discord.Intents.default()
 intents.message_content = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 
-# (Le reste du code est absolument identique à la version précédente)
-
-# --- STOCKAGE DES ALERTES ---
+# --- 2. STOCKAGE ---
 alerts = []
 streamer_id_cache = {}
 
-# --- FONCTIONS UTILITAIRES TWITCH ---
-async def get_streamer_id(streamer_name):
-    if streamer_name in streamer_id_cache:
-        return streamer_id_cache[streamer_name]
-
+# --- 3. FONCTIONS UTILITAIRES TWITCH ---
+async def get_streamer_id(streamer_name: str) -> str | None:
+    if streamer_name in streamer_id_cache: return streamer_id_cache[streamer_name]
     headers = {"Client-ID": TWITCH_CLIENT_ID, "Authorization": f"Bearer {TWITCH_TOKEN}"}
     params = {"login": streamer_name.lower()}
-    response = requests.get("https://api.twitch.tv/helix/users", headers=headers, params=params)
-    
-    if response.status_code == 200:
-        data = response.json()
-        if data["data"]:
+    try:
+        r = requests.get("https://api.twitch.tv/helix/users", headers=headers, params=params, timeout=5)
+        r.raise_for_status()
+        data = r.json()
+        if data.get("data"):
             user_id = data["data"][0]["id"]
             streamer_id_cache[streamer_name] = user_id
             return user_id
-    # Gestion de l'expiration du token
-    elif response.status_code == 401:
-        print("ERREUR: Le token Twitch a probablement expiré. Veuillez en générer un nouveau.")
+    except requests.exceptions.RequestException as e: print(f"Erreur API (get_streamer_id): {e}")
     return None
 
-async def get_stream_status(streamer_id):
+async def get_stream_status(streamer_id: str) -> dict | None:
     headers = {"Client-ID": TWITCH_CLIENT_ID, "Authorization": f"Bearer {TWITCH_TOKEN}"}
     params = {"user_id": streamer_id}
-    response = requests.get("https://api.twitch.tv/helix/streams", headers=headers, params=params)
-    
-    if response.status_code == 200:
-        data = response.json()
-        if data["data"]:
-            return data["data"][0]
+    try:
+        r = requests.get("https://api.twitch.tv/helix/streams", headers=headers, params=params, timeout=5)
+        r.raise_for_status()
+        data = r.json()
+        if data.get("data"): return data["data"][0]
+    except requests.exceptions.RequestException as e: print(f"Erreur API (get_stream_status): {e}")
     return None
 
-# --- COMMANDES DU BOT ---
-@bot.command(name="ping")
-async def ping(ctx, category: str, streamer: str):
+# --- 4. COMMANDES SLASH ---
+
+# FONCTION D'AUTOCOMPLÉTION (réutilisée par /alerte_live)
+async def streamer_autocomplete(interaction: discord.Interaction, current: str) -> list[app_commands.Choice[str]]:
+    if not current: return []
+    headers = {"Client-ID": TWITCH_CLIENT_ID, "Authorization": f"Bearer {TWITCH_TOKEN}"}
+    params = {"query": current, "first": 7}
+    try:
+        r = requests.get("https://api.twitch.tv/helix/search/channels", headers=headers, params=params, timeout=3)
+        if r.status_code == 200:
+            return [app_commands.Choice(name=c['display_name'], value=c['broadcaster_login']) for c in r.json()['data']]
+    except requests.exceptions.RequestException: pass
+    return []
+
+# NOUVELLE COMMANDE /alerte_live
+@bot.tree.command(name="alerte_live", description="Crée une alerte simple pour savoir quand un streamer se connecte.")
+@app_commands.autocomplete(streamer=streamer_autocomplete)
+async def alerte_live(interaction: discord.Interaction, streamer: str):
+    await interaction.response.defer(ephemeral=True)
     streamer_name_lower = streamer.lower()
-    category_name_lower = category.lower()
-
     for alert in alerts:
-        if alert['streamer'] == streamer_name_lower and \
-           alert['category'] == category_name_lower and \
-           alert['author_id'] == ctx.author.id:
-            await ctx.send(f"Vous avez déjà une alerte active pour **{streamer}** dans la catégorie **{category}**.")
+        if alert['streamer'] == streamer_name_lower and alert['category'] == '*' and alert['author_id'] == interaction.user.id:
+            await interaction.followup.send(f"❌ Vous avez déjà une alerte générale active pour **{streamer}**.")
             return
-
-    new_alert = {
-        "streamer": streamer_name_lower,
-        "category": category_name_lower,
-        "channel_id": ctx.channel.id,
-        "author_id": ctx.author.id,
-        "last_status": False
-    }
+    new_alert = {"streamer": streamer_name_lower, "category": '*', "channel_id": interaction.channel.id, "author_id": interaction.user.id, "last_status": False}
     alerts.append(new_alert)
-    await ctx.send(f"✅ Alerte créée ! Je vous préviendrai si **{streamer}** lance un live sur **{category}**.")
+    await interaction.followup.send(f"✅ Alerte générale créée ! Je vous préviendrai dès que **{streamer.capitalize()}** lancera un stream.")
 
-# --- TÂCHE DE FOND ---
+# COMMANDE /alerte AVEC PANEL
+class AlertModal(discord.ui.Modal, title="Créer une Alerte Twitch Spécifique"):
+    streamer = discord.ui.TextInput(label="Nom du streamer Twitch", placeholder="Ex: squeezie", required=True)
+    category = discord.ui.TextInput(label="Nom de la catégorie (jeu)", placeholder="Ex: Grand Theft Auto V", required=True)
+    async def on_submit(self, interaction: discord.Interaction):
+        s_lower, c_lower = self.streamer.value.lower(), self.category.value.lower()
+        for alert in alerts:
+            if alert['streamer'] == s_lower and alert['category'] == c_lower and alert['author_id'] == interaction.user.id:
+                await interaction.response.send_message(f"❌ Alerte déjà active pour **{self.streamer.value}**.", ephemeral=True)
+                return
+        new_alert = {"streamer": s_lower, "category": c_lower, "channel_id": interaction.channel.id, "author_id": interaction.user.id, "last_status": False}
+        alerts.append(new_alert)
+        await interaction.response.send_message(f"✅ Alerte créée pour **{self.streamer.value}** sur **{self.category.value}**.", ephemeral=True)
+
+class PingPanelView(discord.ui.View):
+    def __init__(self): super().__init__(timeout=None)
+    @discord.ui.button(label="Créer une Alerte Spécifique", style=discord.ButtonStyle.primary, emoji="➕")
+    async def create_alert_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.send_modal(AlertModal())
+
+@bot.tree.command(name="alerte", description="Affiche un panel pour configurer une alerte sur un jeu précis.")
+async def alerte_panel(interaction: discord.Interaction):
+    embed = discord.Embed(title="🔔 Configuration des Alertes Twitch", description="Utilisez le bouton ci-dessous pour créer une alerte sur une catégorie de jeu spécifique.", color=discord.Color.purple())
+    embed.set_thumbnail(url="https://static.twitchcdn.net/assets/favicon-32-e29e246c157142c94346.png")
+    await interaction.response.send_message(embed=embed, view=PingPanelView())
+
+# --- 5. COMMANDES DE MODÉRATION ---
+@bot.command(name="clear")
+@commands.has_permissions(manage_messages=True)
+async def clear_alerts(ctx):
+    guild_id = ctx.guild.id
+    to_remove = [a for a in alerts if bot.get_channel(a['channel_id']) and bot.get_channel(a['channel_id']).guild.id == guild_id]
+    if not to_remove: return await ctx.send("Aucune alerte active à supprimer sur ce serveur.")
+    for alert in to_remove: alerts.remove(alert)
+    await ctx.send(f"✅ {len(to_remove)} alerte(s) ont été supprimée(s) pour ce serveur.")
+
+@bot.command(name="all")
+@commands.has_permissions(administrator=True)
+async def clear_all_messages(ctx):
+    msg = await ctx.send(f"Êtes-vous sûr de vouloir supprimer **TOUS** les messages ?\nRépondez par `oui` pour confirmer (15s).")
+    try:
+        await bot.wait_for('message', timeout=15.0, check=lambda m: m.author == ctx.author and m.channel == ctx.channel and m.content.lower() == 'oui')
+        await ctx.send("Confirmation reçue. Suppression...", delete_after=2)
+        deleted = await ctx.channel.purge(limit=None)
+        await ctx.send(f"✅ {len(deleted)} messages supprimés.", delete_after=5)
+    except asyncio.TimeoutError: await msg.edit(content="Délai dépassé. Annulation.")
+
+# --- 6. TÂCHE DE FOND ---
 @tasks.loop(minutes=1)
 async def check_streams():
-    print(f"Vérification des streams en cours... {len(alerts)} alerte(s) active(s).")
-    
+    if not alerts: return
+    print(f"Vérification... ({len(alerts)} alerte(s))")
     for alert in alerts:
         streamer_id = await get_streamer_id(alert['streamer'])
-        if not streamer_id:
-            continue 
-
+        if not streamer_id: continue
         stream_info = await get_stream_status(streamer_id)
         
-        is_live_in_category = False
-        if stream_info:
-            current_category = stream_info.get("game_name", "").lower()
-            if alert['category'] in current_category:
-                is_live_in_category = True
+        condition_met = False
+        if stream_info: # Si le streamer est en live
+            if alert['category'] == '*' or alert['category'] in stream_info.get("game_name", "").lower():
+                condition_met = True
         
-        if is_live_in_category and not alert['last_status']:
-            channel = bot.get_channel(alert['channel_id'])
-            if channel:
+        if condition_met and not alert['last_status']:
+            try:
+                channel = bot.get_channel(alert['channel_id'])
                 user = await bot.fetch_user(alert['author_id'])
-                message = (
-                    f"🔔 **ALERTE** 🔔\n"
-                    f"{user.mention}, le streamer **{alert['streamer'].capitalize()}** vient de lancer un live dans la catégorie **{stream_info['game_name']}** !\n"
-                    f"Titre : {stream_info['title']}\n"
-                    f"https://www.twitch.tv/{alert['streamer']}"
-                )
-                await channel.send(message)
+                if channel and user:
+                    message = (f"🔔 **ALERTE** 🔔\n{user.mention}, **{stream_info['user_name']}** est en live sur **{stream_info['game_name']}** !\n"
+                               f"Titre : {stream_info['title']}\nhttps://www.twitch.tv/{stream_info['user_login']}")
+                    await channel.send(message)
+            except Exception as e: print(f"Erreur envoi notif: {e}")
         
-        alert['last_status'] = is_live_in_category
+        alert['last_status'] = condition_met
 
-# --- DÉMARRAGE DU BOT ---
+# --- 7. DÉMARRAGE ET GESTION DES ERREURS ---
+@bot.event
+async def on_command_error(ctx, error):
+    if isinstance(error, commands.MissingPermissions):
+        await ctx.send("❌ Vous n'avez pas les permissions pour cette commande.")
+    else: print(f"Erreur de commande non gérée: {error}")
+
 @bot.event
 async def on_ready():
     print(f'Connecté en tant que {bot.user.name}')
+    try:
+        synced = await bot.tree.sync()
+        print(f"Synchronisé {len(synced)} commande(s) slash.")
+    except Exception as e: print(f"Erreur de synchronisation: {e}")
     check_streams.start()
 
 bot.run(DISCORD_TOKEN)
