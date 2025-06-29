@@ -19,7 +19,7 @@ TWITCH_TOKEN = os.getenv("TWITCH_TOKEN") # Token pour l'API (alertes de live)
 TTV_BOT_NICKNAME = os.getenv("TTV_BOT_NICKNAME")
 TTV_BOT_TOKEN = os.getenv("TTV_BOT_TOKEN") # Token OAuth pour le chat
 TTV_CHANNEL_TO_MONITOR = os.getenv("TTV_CHANNEL_TO_MONITOR")
-TTV_KEYWORD = ("blazxHello,.")
+TTV_KEYWORD = os.getenv("TTV_KEYWORD")
 
 # --- Vérification de la configuration ---
 if not all([DISCORD_TOKEN, TWITCH_CLIENT_ID, TWITCH_TOKEN, TTV_BOT_NICKNAME, TTV_BOT_TOKEN, TTV_CHANNEL_TO_MONITOR]):
