@@ -1,4 +1,6 @@
 discord.py
-requests
 twitchio
+requests
+python-chess
+aiohttp
 
