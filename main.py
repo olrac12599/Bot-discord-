@@ -45,18 +45,48 @@ class WatcherBot(twitch_commands.Bot):
         print(f"Recherche du mot-clé : '{TTV_KEYWORD}'")
         print("-------------------------------------------------")
 
+    # --- VERSION MODIFIÉE DE LA FONCTION ---
     async def event_message(self, message):
         if message.echo:
             return
 
+        # La condition reste la même
         if TTV_KEYWORD.lower() in message.content.lower():
+            # On garde le message dans la console, c'est utile
             print(f"[TWITCH] Mot-clé trouvé dans le chat de {message.channel.name} par {message.author.name}: {message.content}")
-            # Vous pouvez ajouter ici une notification vers un salon Discord si vous le souhaitez.
-            # Exemple :
-            # channel_to_notify = self.discord_bot.get_channel(ID_DU_SALON_DISCORD)
-            # if channel_to_notify:
-            #     await channel_to_notify.send(f"Mot-clé '{TTV_KEYWORD}' détecté dans le chat de {message.channel.name}!")
 
+            # --- DÉBUT DU CODE AJOUTÉ POUR LA NOTIFICATION DISCORD ---
+            
+            # 1. On définit l'ID de votre salon Discord
+            channel_id = 1388952464782524548
+
+            # 2. On récupère l'objet "salon" via le bot Discord
+            channel_to_notify = self.discord_bot.get_channel(channel_id)
+
+            # 3. On vérifie que le salon existe et que le bot y a accès
+            if channel_to_notify:
+                try:
+                    # 4. On prépare un message clair et esthétique (Embed)
+                    embed = discord.Embed(
+                        title="🚨 Alerte Mot-Clé sur Twitch !",
+                        description=f"Le mot-clé **'{TTV_KEYWORD}'** a été détecté dans le chat.",
+                        color=discord.Color.from_rgb(145, 70, 255) # Couleur violette de Twitch
+                    )
+                    embed.add_field(name="Chaîne Twitch", value=f"[{message.channel.name}](https://twitch.tv/{message.channel.name})", inline=True)
+                    embed.add_field(name="Auteur du message", value=message.author.name, inline=True)
+                    embed.add_field(name="Message", value=message.content, inline=False)
+                    embed.set_thumbnail(url="https://static.twitchcdn.net/assets/favicon-32-e29e246c157142c94346.png")
+                    
+                    # 5. On envoie la notification dans votre salon Discord
+                    await channel_to_notify.send(embed=embed)
+
+                except discord.errors.Forbidden:
+                    print(f"[ERREUR DISCORD] Le bot n'a pas les permissions pour envoyer un message dans le salon ID {channel_id}.")
+                except Exception as e:
+                    print(f"[ERREUR DISCORD] Une erreur inattendue est survenue : {e}")
+            else:
+                print(f"[ERREUR DISCORD] Impossible de trouver le salon avec l'ID {channel_id}. Le bot est-il bien sur le serveur ? L'ID est-il correct ?")
+            # --- FIN DU CODE AJOUTÉ ---
 
 # --- 2. STOCKAGE (EXISTANT) ---
 alerts = []
