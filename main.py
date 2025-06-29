@@ -5,6 +5,167 @@ import os
 import asyncio
 from enum import Enum, auto
 
+# --- NOUVEAU : IMPORTATIONS POUR L'ANALYSE CHESS.COM VIA LICHESS ---
+import chess
+import chess.pgn
+from io import StringIO
+import aiohttp # Bibliothèque moderne pour les requêtes web asynchrones
+
+# --- NOUVEAU : FONCTIONS UTILITAIRES POUR L'ANALYSE ---
+
+async def get_last_game_pgn(username: str) -> str | None:
+    """Récupère le PGN de la dernière partie terminée d'un joueur sur Chess.com."""
+    api_url = f"https://api.chess.com/pub/player/{tbh3945}/games/archives"
+    headers = {"User-Agent": "MonSuperBotDiscord/1.0 (contact@example.com)"} # Il est bon d'avoir un User-Agent
+    try:
+        async with aiohttp.ClientSession(headers=headers) as session:
+            async with session.get(api_url, timeout=10) as archives_response:
+                archives_response.raise_for_status()
+                archives_data = await archives_response.json()
+                archives_list = archives_data.get("archives")
+                if not archives_list: return None
+
+            last_month_url = archives_list[-1]
+            async with session.get(last_month_url, timeout=10) as games_response:
+                games_response.raise_for_status()
+                games_data = await games_response.json()
+                all_games = games_data.get("games")
+                if not all_games: return None
+                
+                return all_games[-1].get('pgn')
+
+    except aiohttp.ClientError as e:
+        print(f"Erreur API Chess.com / aiohttp : {e}")
+        return None
+
+async def get_lichess_evaluation(session: aiohttp.ClientSession, board: chess.Board) -> dict | None:
+    """Interroge l'API de Lichess pour obtenir l'évaluation d'une position."""
+    fen = board.fen()
+    # L'API cloud-eval de Lichess est publique
+    url = f"https://lichess.org/api/cloud-eval?fen={fen}"
+    try:
+        async with session.get(url, timeout=10) as response:
+            if response.status == 200:
+                return await response.json()
+            else:
+                # Si l'API renvoie une erreur (ex: trop de requêtes), on renvoie None
+                return None
+    except aiohttp.ClientError:
+        return None
+
+def classify_lichess_move(eval_before: dict, eval_after: dict, player_pov: bool) -> str:
+    """Analyse la qualité d'un coup en se basant sur l'évaluation de Lichess."""
+    if eval_after.get("knodes", 0) == 0: # Si pas d'analyse disponible
+        return "⚪ Coup Théorique"
+
+    # Mate
+    if "mate" in eval_after:
+        if (player_pov and eval_after["mate"] > 0) or (not player_pov and eval_after["mate"] < 0):
+             return "🏆 Mat !"
+    
+    # Lichess donne l'évaluation du point de vue des blancs.
+    # On doit l'ajuster en fonction du joueur dont c'est le tour.
+    cp_before = eval_before.get("pvs", [{}])[0].get("cp", 0) if eval_before.get("pvs") else 0
+    cp_after = eval_after.get("pvs", [{}])[0].get("cp", 0) if eval_after.get("pvs") else 0
+    
+    # Ajustement pour le point de vue du joueur
+    eval_pov_before = cp_before if player_pov else -cp_before
+    eval_pov_after = cp_after if player_pov else -cp_after
+
+    centipawn_loss = eval_pov_before - eval_pov_after
+
+    if centipawn_loss <= 5: return "🚀 Coup Brillant" # Souvent une meilleure classification que "meilleur"
+    if centipawn_loss <= 20: return "✅ Meilleur Coup"
+    if centipawn_loss <= 50: return "👍 Excellent Coup"
+    if centipawn_loss <= 100: return "👌 Bon Coup"
+    if centipawn_loss <= 200: return "❓ Imprécision"
+    if centipawn_loss <= 350: return "❌ Erreur"
+    return "🔥🔥 GAFEEEEE"
+
+
+# --- NOUVEAU : COMMANDE DISCORD POUR L'ANALYSE DE PARTIE (VERSION LICHESS) ---
+
+@bot.command(name='analysechess')
+@commands.cooldown(1, 120, commands.BucketType.channel) # 1 utilisation toutes les 2 minutes pour respecter l'API
+async def analyse_chess_game_lichess(ctx, username: str = None):
+    """Analyse la dernière partie d'un joueur Chess.com via l'API Lichess."""
+    if not username:
+        await ctx.send("Veuillez fournir un nom d'utilisateur Chess.com. Syntaxe : `!analysechess <username>`")
+        return
+
+    msg = await ctx.send(f"🔍 Recherche de la dernière partie de **{username}**...")
+    
+    pgn_data = await get_last_game_pgn(username.lower())
+    if not pgn_data:
+        await msg.edit(content=f"Impossible de trouver des parties pour le joueur **{username}**. Vérifiez le pseudo.")
+        return
+
+    await msg.edit(content=f"Partie trouvée ! ♟️ Envoi pour analyse aux serveurs Lichess... (cela peut prendre un instant)")
+
+    game = chess.pgn.read_game(StringIO(pgn_data))
+    board = game.board()
+    
+    analysis_results = []
+    move_number = 1
+    
+    try:
+        async with aiohttp.ClientSession() as session:
+            # On analyse chaque coup de la partie
+            for node in game.mainline():
+                move = node.move
+                
+                # On obtient l'éval AVANT le coup
+                eval_before = await get_lichess_evaluation(session, board)
+                
+                is_white_turn = board.turn == chess.WHITE
+                player = "Blancs" if is_white_turn else "Noirs"
+                move_san = board.san(move)
+                
+                board.push(move) # On joue le coup
+                
+                # On obtient l'éval APRES le coup
+                eval_after = await get_lichess_evaluation(session, board)
+                
+                if eval_before and eval_after:
+                    classification = classify_lichess_move(eval_before, eval_after, is_white_turn)
+                    analysis_results.append(f"**{move_number}. {player} ({move_san})** : {classification}")
+                else:
+                    analysis_results.append(f"**{move_number}. {player} ({move_san})** : ⚪ Coup Théorique")
+
+                if not is_white_turn:
+                    move_number += 1
+            
+        white_player = game.headers['White']
+        black_player = game.headers['Black']
+        game_result = game.headers['Result']
+        game_url = game.headers['Link']
+
+        embed = discord.Embed(
+            title=f"Analyse Lichess : {white_player} vs {black_player}",
+            description=f"**Résultat : {game_result}**\n[Voir la partie sur Chess.com]({game_url})",
+            color=discord.Color.purple()
+        )
+        
+        output_text = "\n".join(analysis_results[-20:]) # On affiche les 20 derniers coups
+        if len(analysis_results) > 20:
+             output_text = "(...) \n" + output_text
+
+        embed.add_field(name="Analyse des derniers coups", value=output_text, inline=False)
+        embed.set_footer(text=f"Analyse pour {username} demandée par {ctx.author.name}")
+
+        await msg.edit(content="✅ Analyse Lichess terminée !", embed=embed)
+
+    except Exception as e:
+        await msg.edit(content=f"Une erreur est survenue durant l'analyse : {e}")
+        print(f"Erreur d'analyse Lichess: {e}")
+
+@analyse_chess_game_lichess.error
+async def analyse_chess_game_lichess_error(ctx, error):
+    if isinstance(error, commands.CommandOnCooldown):
+        await ctx.send(f"Respectons les serveurs de Lichess ! Veuillez patienter {error.retry_after:.1f} secondes.")
+
+
+
 # --- NOUVEAU : Import pour le bot Twitch et la gestion des états ---
 from twitchio.ext import commands as twitch_commands
 
