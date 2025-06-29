@@ -33,6 +33,56 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 
 # --- NOUVEAU : BOT DE SURVEILLANCE DU CHAT TWITCH ---
 # Cette classe est entièrement nouvelle et gère la connexion au chat Twitch.
+
+# Dans la classe WatcherBot
+
+# --- VERSION MIROIR (NON RECOMMANDÉE) ---
+async def event_message(self, message):
+    # On ignore les messages du bot lui-même
+    if message.echo:
+        return
+        
+    # ATTENTION : Ce code s'exécute pour CHAQUE message, ce qui peut causer des problèmes.
+
+    # 1. On définit l'ID de votre salon Discord miroir
+    channel_id = 1388952464782524548  # Assurez-vous que c'est le bon salon
+
+    # 2. On récupère l'objet "salon"
+    channel_to_notify = self.discord_bot.get_channel(channel_id)
+
+    # 3. On vérifie que le salon existe
+    if channel_to_notify:
+        try:
+            # 4. On formate le message pour qu'il ressemble au chat Twitch
+            # On met le nom de l'auteur en gras pour le distinguer
+            formatted_message = f"**{message.author.name}**: {message.content}"
+            
+            # Limiter la longueur du message pour éviter les erreurs Discord
+            if len(formatted_message) > 2000:
+                formatted_message = formatted_message[:1997] + "..."
+
+            # 5. On envoie le message formaté sur Discord
+            await channel_to_notify.send(formatted_message)
+
+        except discord.errors.Forbidden:
+            # On affiche l'erreur une seule fois pour ne pas spammer la console
+            if not hasattr(self, 'logged_forbidden_error'):
+                print(f"[ERREUR DISCORD] Le bot n'a pas les permissions pour envoyer un message dans le salon ID {channel_id}.")
+                self.logged_forbidden_error = True
+        except Exception as e:
+            print(f"[ERREUR INATTENDUE] Erreur lors de l'envoi du miroir : {e}")
+    else:
+        # On affiche l'erreur une seule fois pour ne pas spammer la console
+        if not hasattr(self, 'logged_channel_error'):
+            print(f"[ERREUR DISCORD] Impossible de trouver le salon avec l'ID {channel_id}.")
+            self.logged_channel_error = True
+
+
+
+
+
+
+
 class WatcherBot(twitch_commands.Bot):
     def __init__(self, discord_bot_instance):
         super().__init__(token=TTV_BOT_TOKEN, prefix='!', initial_channels=[TTV_CHANNEL_TO_MONITOR])
