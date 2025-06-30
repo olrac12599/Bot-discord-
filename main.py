@@ -37,10 +37,10 @@ class ScrapingError(Exception):
         self.screenshot_bytes = screenshot_bytes
 
 
-# --- FONCTION DE SCRAPING MISE À JOUR ---
+# --- FONCTION DE SCRAPING AVEC GESTION D'ERREUR ROBUSTE ---
 async def get_pgn_from_chess_com(url: str, username: str, password: str) -> str:
     """
-    Utilise get_by_placeholder pour une sélection non-ambiguë des champs de connexion.
+    Gestion d'erreur améliorée pour la capture d'écran.
     """
     async with async_playwright() as p:
         browser = await p.firefox.launch(headless=True)
@@ -51,18 +51,11 @@ async def get_pgn_from_chess_com(url: str, username: str, password: str) -> str:
             
             try:
                 print("Vérification de la présence de la bannière de cookies...")
-                accept_button = page.get_by_role("button", name="I Accept")
-                await accept_button.wait_for(state="visible", timeout=10000)
-                print("Bannière trouvée. Clic sur 'I Accept'...")
-                await accept_button.click()
+                await page.get_by_role("button", name="I Accept").click(timeout=10000)
                 print("Cookies acceptés.")
                 await page.wait_for_timeout(1000) 
             except PlaywrightTimeoutError:
                 print("Aucune bannière de cookies détectée, on continue.")
-            
-            # --- MODIFICATION CLÉ : ON UTILISE get_by_placeholder ---
-            # Cette méthode cible le champ via le texte d'exemple visible à l'intérieur,
-            # ce qui résout l'ambiguïté quand plusieurs labels sont identiques.
             
             print("Remplissage du champ 'username' via son placeholder...")
             await page.get_by_placeholder("Username, Phone, or Email").fill(username)
@@ -80,25 +73,26 @@ async def get_pgn_from_chess_com(url: str, username: str, password: str) -> str:
             print(f"Navigation vers l'URL de la partie : {url}")
             await page.goto(url, timeout=90000)
 
-            share_button_selector = ".icon-font-chess.share"
-            await page.wait_for_selector(share_button_selector, state="visible", timeout=30000)
-            await page.click(share_button_selector)
-
-            pgn_tab_selector = 'div.share-menu-tab-component-header:has-text("PGN")'
-            await page.wait_for_selector(pgn_tab_selector, state="visible", timeout=20000)
-            await page.click(pgn_tab_selector)
+            await page.click(".icon-font-chess.share", timeout=30000)
+            await page.click('div.share-menu-tab-component-header:has-text("PGN")', timeout=20000)
             
-            pgn_content_selector = 'textarea.share-menu-tab-pgn-textarea'
-            await page.wait_for_selector(pgn_content_selector, state="visible", timeout=20000)
-            pgn_text = await page.input_value(pgn_content_selector)
+            pgn_text = await page.input_value('textarea.share-menu-tab-pgn-textarea', timeout=20000)
             
-            await browser.close()
             return pgn_text
 
         except Exception as e:
-            print(f"ERREUR: Une erreur de scraping est survenue. Prise de la capture d'écran...")
-            screenshot_bytes = await page.screenshot(full_page=True)
-            await browser.close()
+            print(f"ERREUR: Une erreur de scraping est survenue. Détails: {e}")
+            screenshot_bytes = None
+
+            if not page.is_closed():
+                print("La page est ouverte, tentative de capture d'écran...")
+                try:
+                    screenshot_bytes = await page.screenshot(full_page=True)
+                except Exception as screenshot_error:
+                    print(f"Impossible de prendre la capture d'écran: {screenshot_error}")
+            else:
+                print("La page était déjà fermée, aucune capture d'écran possible.")
+            
             raise ScrapingError(f"Détails: {e}", screenshot_bytes=screenshot_bytes)
 
 
