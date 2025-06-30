@@ -2,3 +2,5 @@ discord.py
 twitchio
 python-dotenv
 playwright
+pillow
+Pillow
