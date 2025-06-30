@@ -1,50 +1,34 @@
-# Dockerfile finalisé pour un bot Python avec Playwright, Xvfb, FFmpeg et Flask (streaming)
+FROM python:3.11-slim
 
-# Étape 1 : Utiliser une image Docker officielle de Playwright.
-# Utilisation d'une version plus récente et vérifiée sur Docker Hub (v1.45.0 avec Python 3.11 sur Debian Bookworm).
-# Si cette version n'est pas trouvée non plus, vous devrez consulter
-# https://hub.docker.com/r/mcr.microsoft.com/playwright/python/tags
-# pour trouver le tag exact le plus récent.
-FROM mcr.microsoft.com/playwright/python:v1.45.0-python3.11-bookworm
-
-# Le reste du Dockerfile reste inchangé
-# ... (le reste de votre Dockerfile) ...
-
-# Étape 2 : Définir le répertoire de travail dans le conteneur.
-# Tous les fichiers de votre projet seront copiés ici.
-WORKDIR /app
-
-# Étape 3 : Copier le fichier requirements.txt et installer les dépendances Python.
-# Nous installons d'abord les dépendances Python pour tirer parti de la mise en cache de Docker.
-# Si requirements.txt ne change pas, cette étape ne sera pas reconstruite.
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
-
-# Étape 4 : Installer les dépendances système supplémentaires.
-# L'image Playwright inclut déjà les navigateurs et leurs dépendances.
-# Nous devons nous assurer que Xvfb (pour l'affichage virtuel) et FFmpeg (pour la capture vidéo)
-# sont bien installés, car ils ne sont pas toujours inclus par défaut dans toutes les images Playwright.
-# --no-install-recommends réduit la taille finale de l'image.
-# rm -rf /var/lib/apt/lists/* nettoie le cache APT pour une image plus petite.
+# Installer les dépendances système nécessaires
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    xvfb \
+    curl \
+    wget \
+    gnupg \
+    libnss3 \
+    libatk-bridge2.0-0 \
+    libgtk-3-0 \
+    libdrm2 \
+    libxss1 \
+    libasound2 \
     ffmpeg \
-    # Ajout d'une dépendance parfois manquante pour le rendu graphique de Xvfb avec certains logiciels
+    xvfb \
     libgl1-mesa-dri \
     && rm -rf /var/lib/apt/lists/*
 
-# Étape 5 : Copier le reste de votre code source dans le conteneur.
-# Cela inclut main.py et tout autre fichier de votre projet.
+# Installer Node.js (requis par Playwright)
+RUN curl -fsSL https://deb.nodesource.com/setup_18.x | bash - && \
+    apt-get install -y nodejs && \
+    npm install -g npm@latest
+
+# Installer Playwright Python et navigateurs
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+RUN playwright install
+
+WORKDIR /app
 COPY . .
 
-# Étape 6 : Définir la variable d'environnement DISPLAY.
-# Xvfb va tourner sur cette "pseudo-adresse d'affichage" et Playwright sera configuré pour l'utiliser.
 ENV DISPLAY=:99
 
-# Étape 7 : Exposer le port sur lequel votre application Flask va écouter.
-# C'est le port que Railway ou tout autre hébergeur doit ouvrir pour rendre votre stream accessible.
-EXPOSE 5000
-
-# Étape 8 : Définir la commande qui sera exécutée lorsque le conteneur démarre.
-# Cela lance votre script Python principal.
 CMD ["python", "main.py"]
