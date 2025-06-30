@@ -6,7 +6,7 @@ import os
 import asyncio
 from enum import Enum, auto
 from playwright.async_api import async_playwright, TimeoutError as PlaywrightTimeoutError
-from playwright_stealth import stealth_async # <-- NOUVEL IMPORT POUR LE CAMOUFLAGE
+from playwright_stealth.async_api import stealth_async # On précise qu'on veut la version async
 import io
 from pathlib import Path
 
