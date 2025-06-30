@@ -3,4 +3,3 @@ twitchio
 requests
 chess
 chess.com
-chess.com 3.11.1
