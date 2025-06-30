@@ -3,4 +3,4 @@ twitchio
 requests
 python-chess
 aiohttp
-
+cairosvg
