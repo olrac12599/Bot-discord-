@@ -9,6 +9,7 @@ import chess
 import chess.pgn
 import io
 from enum import Enum, auto
+import re  # ajouté pour le parsing HTML
 
 # --- CONFIGURATION ---
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
@@ -32,28 +33,18 @@ streamer_id_cache = {}
 # --- FONCTIONS UTILES ---
 
 def get_live_game_moves(game_id):
-    url = f"https://api.chess.com/pub/game/live/{game_id}"
-    r = requests.get(url, timeout=5)
-    r.raise_for_status()
-    data = r.json()
-    if data.get("status") != "started":
-        raise RuntimeError("La partie est terminée ou indisponible.")
-    moves_str = data.get("moves", "")
+    url = f"https://www.chess.com/game/live/{game_id}"
+    headers = {"User-Agent": "Mozilla/5.0"}
+    r = requests.get(url, headers=headers, timeout=5)
+    if r.status_code != 200:
+        raise RuntimeError(f"Erreur HTTP {r.status_code} lors de la récupération.")
+    text = r.text
+    match = re.search(r'"moves":"([^"]+)"', text)
+    if not match:
+        raise RuntimeError("Impossible de trouver les coups dans la page.")
+    moves_str = match.group(1)
     moves = moves_str.split()
     return moves
-
-def build_game_from_moves(moves):
-    game = chess.pgn.Game()
-    node = game
-    board = game.board()
-    for move_san in moves:
-        try:
-            move = board.parse_san(move_san)
-        except Exception:
-            break
-        board.push(move)
-        node = node.add_variation(move)
-    return game, board
 
 def get_lichess_evaluation(fen):
     url = f"https://lichess.org/api/cloud-eval?fen={fen}"
@@ -81,35 +72,6 @@ def classify_move(eval_before, eval_after, turn):
     if loss >= 70: return "❓ Erreur"
     if loss >= 30: return "🤔 Imprécision"
     return None
-
-async def get_streamer_id(streamer_name: str) -> str | None:
-    if streamer_name in streamer_id_cache:
-        return streamer_id_cache[streamer_name]
-    headers = {"Client-ID": TWITCH_CLIENT_ID, "Authorization": f"Bearer {TWITCH_TOKEN}"}
-    params = {"login": streamer_name.lower()}
-    try:
-        r = requests.get("https://api.twitch.tv/helix/users", headers=headers, params=params, timeout=5)
-        r.raise_for_status()
-        data = r.json()
-        if data.get("data"):
-            user_id = data["data"][0]["id"]
-            streamer_id_cache[streamer_name] = user_id
-            return user_id
-    except:
-        return None
-
-async def get_stream_status(streamer_id: str) -> dict | None:
-    headers = {"Client-ID": TWITCH_CLIENT_ID, "Authorization": f"Bearer {TWITCH_TOKEN}"}
-    params = {"user_id": streamer_id}
-    try:
-        r = requests.get("https://api.twitch.tv/helix/streams", headers=headers, params=params, timeout=5)
-        r.raise_for_status()
-        data = r.json()
-        if data.get("data"):
-            return data["data"][0]
-        return None
-    except:
-        return None
 
 # --- CLASSE BOT TWITCH ---
 
@@ -174,17 +136,20 @@ class WatcherBot(twitch_commands.Bot):
 # --- COMMANDES DISCORD ---
 
 @bot.command(name="chess")
-async def start_chess_analysis(ctx, url: str):
-    if "/game/live/" not in url:
-        await ctx.send("❌ URL de partie live Chess.com invalide.")
-        return
-    game_id = url.strip("/").split("/")[-1]
+async def start_chess_analysis(ctx, game_id: str):
     if ctx.channel.id in tracked_games:
         await ctx.send("⏳ Une analyse est déjà en cours dans ce salon. Utilisez `!stopchess` pour l'arrêter.")
         return
+
+    try:
+        moves = get_live_game_moves(game_id)  # test validité
+    except Exception as e:
+        await ctx.send(f"❌ Erreur récupération partie : {e}")
+        return
+
     tracked_games[ctx.channel.id] = {"game_id": game_id, "last_ply": 0}
     game_analysis_loop.start(ctx)
-    await ctx.send(f"✅ Analyse commencée pour la partie live `{game_id}`. Mise à jour toutes les 15 secondes.")
+    await ctx.send(f"✅ Analyse démarrée pour la partie live `{game_id}`. Mise à jour toutes les 15 secondes.")
 
 @bot.command(name="stopchess")
 async def stop_chess_analysis(ctx):
@@ -232,33 +197,28 @@ async def game_analysis_loop(ctx):
 
     try:
         moves = get_live_game_moves(game_id)
-        game, board = build_game_from_moves(moves)
+        board = chess.Board()
         last_ply = tracked_games[cid]["last_ply"]
         current_ply = len(moves)
 
         # Analyser uniquement les coups nouveaux
         for i in range(last_ply, current_ply):
-            board_tmp = chess.Board()
-            for j in range(i):
-                move = board_tmp.parse_san(moves[j])
-                board_tmp.push(move)
-
-            fen_before = board_tmp.fen()
-            turn = board_tmp.turn
-
             move_san = moves[i]
-            move = board_tmp.parse_san(move_san)
-            board_tmp.push(move)
-
+            try:
+                move = board.parse_san(move_san)
+            except Exception:
+                break
+            fen_before = board.fen()
+            turn = board.turn
+            board.push(move)
             eval_before = get_lichess_evaluation(fen_before)
-            eval_after = get_lichess_evaluation(board_tmp.fen())
+            eval_after = get_lichess_evaluation(board.fen())
 
             if eval_before is not None and eval_after is not None:
                 quality = classify_move(eval_before, eval_after, turn)
                 if quality:
-                    player = game.headers["White"] if turn == chess.WHITE else game.headers["Black"]
                     ply_num = i+1
-                    await ctx.send(f"**{(ply_num+1)//2}. {move_san}** par **{player}** – {quality} (Eval: {eval_before/100:.2f} ➜ {eval_after/100:.2f})")
+                    await ctx.send(f"**{(ply_num+1)//2}. {move_san}** – {quality} (Eval: {eval_before/100:.2f} ➜ {eval_after/100:.2f})")
 
         tracked_games[cid]["last_ply"] = current_ply
 
