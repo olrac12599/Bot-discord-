@@ -1,6 +1,5 @@
 discord.py
 twitchio
 requests
-python-chess
-aiohttp
-cairosvg
+chess
+chess.com
