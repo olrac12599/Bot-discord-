@@ -11,6 +11,7 @@ from selenium.webdriver.chrome.options import Options
 from discord.ext import commands
 from moviepy.editor import VideoFileClip
 from dotenv import load_dotenv
+import shutil # <<< Importer le module shutil
 
 load_dotenv()
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
@@ -27,16 +28,21 @@ last_error = ""
 
 def record_game(url, duration=10):
     global last_error
+    user_data_dir = None # Initialiser à None
     try:
         print("[DEBUG] Début de record_game")
         chromedriver_autoinstaller.install()
 
         chrome_options = Options()
-        # chrome_options.add_argument("--headless") # Cette ligne était déjà commentée
-        chrome_options.add_argument("--no-sandbox") # <<< Indentation corrigée ici
-        chrome_options.add_argument("--disable-dev-shm-usage") # <<< Indentation corrigée ici
-        chrome_options.add_argument("--window-size=1280,720") # <<< Indentation corrigée ici
-        chrome_options.add_argument(f"--user-data-dir=/tmp/selenium_profile_{time.time()}")  # <<< Indentation corrigée ici
+        # chrome_options.add_argument("--headless")
+        chrome_options.add_argument("--no-sandbox")
+        chrome_options.add_argument("--disable-dev-shm-usage")
+        chrome_options.add_argument("--window-size=1280,720")
+        
+        # Générer un chemin unique et le stocker pour une suppression ultérieure
+        user_data_dir = f"/tmp/selenium_profile_{int(time.time())}" # Utiliser int() pour un nom plus propre
+        chrome_options.add_argument(f"--user-data-dir={user_data_dir}")
+        
         driver = webdriver.Chrome(options=chrome_options)
         print("[DEBUG] Navigateur lancé")
         driver.get(url)
@@ -59,12 +65,20 @@ def record_game(url, duration=10):
 
             out.release()
             print(f"[DEBUG] Enregistrement terminé. Frames capturées: {frame_count}")
+        
         driver.quit()
         return True
     except Exception as e:
         last_error = f"[Erreur record_game] {e}"
         print(last_error)
         return False
+    finally: # <<< Le bloc finally s'exécute toujours, que l'erreur se produise ou non
+        if user_data_dir and os.path.exists(user_data_dir):
+            try:
+                shutil.rmtree(user_data_dir) # <<< Supprime récursivement le répertoire
+                print(f"[DEBUG] Répertoire de données utilisateur supprimé : {user_data_dir}")
+            except OSError as e:
+                print(f"[ERREUR] Impossible de supprimer le répertoire {user_data_dir}: {e}")
 
 def compress_video():
     global last_error
