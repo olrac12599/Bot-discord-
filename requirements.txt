@@ -1,14 +1,11 @@
-discord.py
-selenium
-opencv-python
-mss
+discord.py==2.0.1
+playwright==1.36.0
+playwright-stealth==1.1.13
+twitchio==2.3.0
+asyncio==3.4.3
+numpy==1.24.4
+opencv-python==4.7.0.72
+mss==6.1.0
 moviepy==1.0.3
-python-dotenv
-chromedriver-autoinstaller
-
-# Dépendances internes de moviepy
-imageio==2.9.0
-imageio-ffmpeg==0.4.2
-decorator==4.4.2
-tqdm==4.48.2
-numpy>=1.17
+chromedriver-autoinstaller==0.4.0
+python-dotenv==1.0.0
