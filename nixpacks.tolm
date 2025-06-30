@@ -1,9 +1,5 @@
-# Fichier de configuration pour Nixpacks
-
 [phases.build]
-# On installe le navigateur CHROMIUM et ses dépendances système.
 cmds = ["playwright install chromium --with-deps"]
 
 [start]
-# On lance notre script principal.
-cmd = "python bot.py"
+cmd = "python main.py"
