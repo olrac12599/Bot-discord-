@@ -3,5 +3,4 @@ twitchio
 requests
 chess
 chess.com
-pip install chess.com
 chess.com 3.11.1
