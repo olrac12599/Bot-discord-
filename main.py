@@ -1,5 +1,3 @@
-# --- IMPORTS CORRIGÉS ---
-
 import discord
 from discord.ext import commands
 from twitchio.ext import commands as twitch_commands
@@ -7,45 +5,10 @@ import os
 import asyncio
 from enum import Enum, auto
 from playwright.async_api import async_playwright, TimeoutError as PlaywrightTimeoutError
-from playwright_stealth.async_api import stealth_async # <-- LIGNE CORRIGÉE
+from playwright_stealth.async_api import stealth_async
 import io
 from pathlib import Path
 
-
-# --- FONCTION DE SCRAPING AVEC L'IMPORT CORRIGÉ ---
-async def get_pgn_from_chess_com(url: str, username: str, password: str) -> (str, str):
-    videos_dir = Path("debug_videos")
-    videos_dir.mkdir(exist_ok=True)
-    max_retries = 3
-    browser_args = ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--disable-gpu']
-
-    async with async_playwright() as p:
-        browser = await p.chromium.launch(headless=True, args=browser_args)
-        context = await browser.new_context(
-            record_video_dir=str(videos_dir),
-            record_video_size={"width": 1280, "height": 720},
-            base_url="https://www.chess.com"
-        )
-        page = await context.new_page()
-
-        # ON APPLIQUE LE CAMOUFLAGE (cette ligne ne change pas)
-        await stealth_async(page)
-
-        try:
-            # ... le reste de la fonction est identique et correct ...
-            login_successful = False
-            for attempt in range(max_retries):
-                print(f"Tentative de connexion n°{attempt + 1}/{max_retries}...")
-                await page.goto("/login_and_go", timeout=90000)
-                await page.wait_for_load_state('domcontentloaded')
-
-                is_blocked = await page.is_visible("text=Verify you are human")
-                if is_blocked:
-                    print("Détecté par Cloudflare sur la page de connexion.")
-                    raise ScrapingError("Bloqué par le CAPTCHA de Cloudflare avant la connexion.")
-                
-                # etc...
-# ... collez le reste de la fonction ici ...
 
 # --- CONFIGURATION ---
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
