@@ -1,4 +1,3 @@
-
 # --- SECTION 1 : IMPORTS ---
 import discord
 from discord.ext import commands, tasks
@@ -9,8 +8,10 @@ import asyncio
 from enum import Enum, auto
 import chess
 import chess.pgn
+import chess.svg #+ Ajout pour la génération d'images
 from io import StringIO
 import aiohttp
+import cairosvg #+ Ajout pour la conversion d'images
 
 # --- SECTION 2 : CONFIGURATION ---
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
@@ -30,10 +31,11 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 # --- SECTION 4 : STOCKAGE ET CACHES ---
 blazx_subscriptions = []
 streamer_id_cache = {}
+live_chess_sessions = {} #+ Dictionnaire pour stocker les parties suivies par salon
 
 # --- SECTION 5 : FONCTIONS UTILITAIRES (API & LOGIQUE) ---
 
-# Fonctions pour l'API Twitch
+# Fonctions pour l'API Twitch (inchangées)
 async def get_streamer_id(streamer_name: str) -> str | None:
     if streamer_name in streamer_id_cache: return streamer_id_cache[streamer_name]
     headers = {"Client-ID": TWITCH_CLIENT_ID, "Authorization": f"Bearer {TWITCH_TOKEN}"}
@@ -62,66 +64,52 @@ async def get_stream_status(streamer_id: str) -> dict | None:
         print(f"Erreur API (get_stream_status): {e}")
     return None
 
-# Fonctions pour l'analyse d'échecs
-async def get_last_game_pgn(username: str) -> str | None:
-    # CORRIGÉ : Utilise la variable `username` au lieu d'un nom en dur
+#+ --- NOUVELLES FONCTIONS POUR LE SUIVI LIVE DE CHESS.COM ---
+
+async def find_live_game(session: aiohttp.ClientSession, username: str) -> dict | None:
+    """Trouve la partie en direct d'un joueur sur Chess.com."""
     api_url = f"https://api.chess.com/pub/player/{username}/games/archives"
-    headers = {"User-Agent": "MonSuperBotDiscord/1.0 (contact@example.com)"}
+    headers = {"User-Agent": f"MonSuperBotDiscord/1.0 ({bot.user.name})"}
     try:
-        async with aiohttp.ClientSession(headers=headers) as session:
-            async with session.get(api_url, timeout=10) as archives_response:
-                archives_response.raise_for_status()
-                archives_data = await archives_response.json()
-                archives_list = archives_data.get("archives")
-                if not archives_list: return None
+        async with session.get(api_url, headers=headers, timeout=10) as archives_response:
+            archives_response.raise_for_status()
+            archives_data = await archives_response.json()
+            archives_list = archives_data.get("archives")
+            if not archives_list: return None
 
-            last_month_url = archives_list[-1]
-            async with session.get(last_month_url, timeout=10) as games_response:
-                games_response.raise_for_status()
-                games_data = await games_response.json()
-                all_games = games_data.get("games")
-                if not all_games: return None
-                
-                return all_games[-1].get('pgn')
+        # On vérifie l'archive du mois en cours
+        last_month_url = archives_list[-1]
+        async with session.get(last_month_url, headers=headers, timeout=10) as games_response:
+            games_response.raise_for_status()
+            games_data = await games_response.json()
+            all_games = games_data.get("games", [])
+            
+            # On cherche une partie non terminée en partant de la plus récente
+            for game_data in reversed(all_games):
+                if game_data.get("in_progress", False) or (game_data.get("pgn") and 'Result "*"' in game_data["pgn"]):
+                    game_data["source_archive_url"] = last_month_url # On sauvegarde l'URL pour les mises à jour
+                    return game_data
     except aiohttp.ClientError as e:
-        print(f"Erreur API Chess.com / aiohttp : {e}")
-        return None
+        print(f"Erreur API Chess.com / aiohttp (find_live_game) : {e}")
+    return None
 
-async def get_lichess_evaluation(session: aiohttp.ClientSession, board: chess.Board) -> dict | None:
-    fen = board.fen()
-    url = f"https://lichess.org/api/cloud-eval?fen={fen}"
-    try:
-        async with session.get(url, timeout=10) as response:
-            if response.status == 200: return await response.json()
-            else: return None
-    except aiohttp.ClientError:
-        return None
-
-def classify_lichess_move(eval_before: dict, eval_after: dict, player_pov: bool) -> str:
-    if not eval_before or not eval_after or eval_after.get("knodes", 0) == 0:
-        return "⚪ Coup Théorique"
-
-    if "mate" in eval_after and eval_after["mate"] is not None:
-        if (player_pov and eval_after["mate"] > 0) or (not player_pov and eval_after["mate"] < 0):
-             return "🏆 Mat !"
+def generate_board_image(board: chess.Board, last_move: chess.Move = None, player_pov: str = 'white') -> str:
+    """Génère une image PNG de l'échiquier et retourne le nom du fichier."""
+    # Détermine l'orientation de l'échiquier
+    orientation = chess.WHITE if player_pov.lower() == 'white' else chess.BLACK
     
-    cp_before = eval_before.get("pvs", [{}])[0].get("cp", 0) if eval_before.get("pvs") else 0
-    cp_after = eval_after.get("pvs", [{}])[0].get("cp", 0) if eval_after.get("pvs") else 0
+    # Génère le SVG
+    boardsvg = chess.svg.board(board=board, lastmove=last_move, orientation=orientation, size=400)
     
-    eval_pov_before = cp_before if player_pov else -cp_before
-    eval_pov_after = cp_after if player_pov else -cp_after
+    # Nom du fichier unique pour éviter les conflits
+    filename = f"board_{board.fen().replace('/', '')[:15]}.png"
+    filepath = os.path.join(os.getcwd(), filename) # Sauvegarde dans le répertoire courant
 
-    centipawn_loss = eval_pov_before - eval_pov_after
+    # Convertit et sauvegarde
+    cairosvg.svg2png(bytestring=boardsvg.encode('utf-8'), write_to=filepath)
+    return filepath
 
-    if centipawn_loss <= 5: return "🚀 Coup Brillant"
-    if centipawn_loss <= 20: return "✅ Meilleur Coup"
-    if centipawn_loss <= 50: return "👍 Excellent Coup"
-    if centipawn_loss <= 100: return "👌 Bon Coup"
-    if centipawn_loss <= 200: return "❓ Imprécision"
-    if centipawn_loss <= 350: return "❌ Erreur"
-    return "🔥🔥 GAFEEEEE"
-
-# --- SECTION 6 : CLASSES DES BOTS EXTERNES ---
+# --- SECTION 6 : CLASSES DES BOTS EXTERNES (inchangée) ---
 
 class WatcherMode(Enum):
     IDLE = auto(); KEYWORD = auto(); MIRROR = auto()
@@ -184,61 +172,98 @@ class WatcherBot(twitch_commands.Bot):
             formatted_message = f"**{message.author.name}**: {message.content}"
             await self.target_discord_channel.send(formatted_message[:2000])
 
+
 # --- SECTION 7 : COMMANDES DISCORD ---
 
-# Commande pour l'analyse d'échecs
-@bot.command(name='analysechess')
-@commands.cooldown(1, 120, commands.BucketType.channel)
-async def analyse_chess_game_lichess(ctx, username: str = None):
+#+ --- NOUVELLES COMMANDES POUR LE SUIVI DE PARTIE ---
+
+@bot.command(name='suivrechess')
+@commands.cooldown(1, 30, commands.BucketType.channel)
+async def suivre_chess(ctx, username: str = None):
+    """Lance le suivi en direct d'une partie Chess.com."""
     if not username:
-        await ctx.send("Veuillez fournir un nom d'utilisateur Chess.com. Syntaxe : `!analysechess <username>`")
+        await ctx.send("Veuillez fournir un nom d'utilisateur Chess.com. Syntaxe : `!suivrechess <pseudo>`")
+        ctx.command.reset_cooldown(ctx)
+        return
+        
+    if ctx.channel.id in live_chess_sessions:
+        await ctx.send("Un suivi de partie est déjà en cours dans ce salon. Utilisez `!stopchess` pour l'arrêter.")
+        ctx.command.reset_cooldown(ctx)
         return
 
-    msg = await ctx.send(f"🔍 Recherche de la dernière partie de **{username}**...")
-    pgn_data = await get_last_game_pgn(username.lower())
-    if not pgn_data:
-        await msg.edit(content=f"Impossible de trouver des parties pour le joueur **{username}**. Vérifiez le pseudo.")
-        return
-
-    await msg.edit(content=f"Partie trouvée ! ♟️ Envoi pour analyse aux serveurs Lichess... (cela peut prendre un instant)")
-    game = chess.pgn.read_game(StringIO(pgn_data))
-    board = game.board()
-    analysis_results = []
-    move_number = 1
+    msg = await ctx.send(f"🔍 Recherche d'une partie en direct pour **{username}**...")
 
     try:
         async with aiohttp.ClientSession() as session:
-            for node in game.mainline():
-                move = node.move
-                eval_before = await get_lichess_evaluation(session, board)
-                is_white_turn = board.turn == chess.WHITE
-                player = "Blancs" if is_white_turn else "Noirs"
-                move_san = board.san(move)
-                board.push(move)
-                eval_after = await get_lichess_evaluation(session, board)
-                
-                classification = classify_lichess_move(eval_before, eval_after, is_white_turn)
-                analysis_results.append(f"**{move_number}. {player} ({move_san})** : {classification}")
+            game_data = await find_live_game(session, username.lower())
 
-                if not is_white_turn: move_number += 1
-            
-        white_player, black_player, game_result, game_url = game.headers.get('White'), game.headers.get('Black'), game.headers.get('Result'), game.headers.get('Link')
-        embed = discord.Embed(title=f"Analyse Lichess : {white_player} vs {black_player}", description=f"**Résultat : {game_result}**\n[Voir la partie sur Chess.com]({game_url})", color=discord.Color.purple())
-        output_text = "\n".join(analysis_results[-20:])
-        if len(analysis_results) > 20: output_text = "(...) \n" + output_text
-        embed.add_field(name="Analyse des derniers coups", value=output_text, inline=False)
-        embed.set_footer(text=f"Analyse pour {username} demandée par {ctx.author.name}")
-        await msg.edit(content="✅ Analyse Lichess terminée !", embed=embed)
+        if not game_data or not game_data.get('pgn'):
+            await msg.edit(content=f"Aucune partie en direct trouvée pour **{username}**.")
+            return
+        
+        pgn = StringIO(game_data['pgn'])
+        game = chess.pgn.read_game(pgn)
+        board = game.board()
+        
+        # Détermine le point de vue
+        player_pov = 'white'
+        if game.headers.get('White', '').lower() != username.lower():
+            player_pov = 'black'
+
+        # Génère l'image et l'embed
+        last_move = game.mainline().moves[-1] if list(game.mainline().moves) else None
+        image_path = generate_board_image(board, last_move, player_pov)
+        file = discord.File(image_path, filename=os.path.basename(image_path))
+
+        embed = discord.Embed(
+            title=f"🔴 Suivi en direct : {game.headers.get('White')} vs {game.headers.get('Black')}",
+            description=f"Partie de **{username}** en cours. Les mises à jour apparaîtront ici.",
+            color=discord.Color.green(),
+            url=game.headers.get('Link')
+        )
+        embed.set_image(url=f"attachment://{os.path.basename(image_path)}")
+        embed.set_footer(text=f"Partie suivie pour {username} | Joueur au trait : {'Blancs' if board.turn == chess.WHITE else 'Noirs'}")
+        
+        await msg.delete() # Supprime "Recherche en cours..."
+        new_msg = await ctx.send(file=file, embed=embed)
+        os.remove(image_path)
+
+        # Sauvegarde de la session
+        live_chess_sessions[ctx.channel.id] = {
+            "message": new_msg,
+            "username": username.lower(),
+            "game_url": game.headers.get('Link'),
+            "last_pgn": game_data['pgn'],
+            "source_archive_url": game_data['source_archive_url'],
+            "player_pov": player_pov
+        }
+        
     except Exception as e:
-        await msg.edit(content=f"Une erreur est survenue durant l'analyse : {e}")
-        print(f"Erreur d'analyse Lichess: {e}")
+        await msg.edit(content=f"Une erreur est survenue : {e}")
+        print(f"Erreur dans !suivrechess : {e}")
 
-@analyse_chess_game_lichess.error
-async def analyse_chess_game_lichess_error(ctx, error):
+
+@bot.command(name='stopchess')
+async def stop_chess(ctx):
+    """Arrête le suivi de partie en cours dans le salon."""
+    if ctx.channel.id in live_chess_sessions:
+        session_data = live_chess_sessions.pop(ctx.channel.id)
+        message_to_edit = session_data["message"]
+        embed = message_to_edit.embeds[0]
+        embed.title = f"⚫ Suivi terminé : {embed.title.split(': ')[1]}"
+        embed.description = "Le suivi de cette partie a été arrêté manuellement."
+        embed.color = discord.Color.dark_grey()
+        await message_to_edit.edit(embed=embed)
+        await ctx.send("Le suivi de la partie a été arrêté.")
+    else:
+        await ctx.send("Aucun suivi de partie n'est actif dans ce salon.")
+
+@suivre_chess.error
+async def suivre_chess_error(ctx, error):
     if isinstance(error, commands.CommandOnCooldown):
-        await ctx.send(f"Respectons les serveurs de Lichess ! Veuillez patienter {error.retry_after:.1f} secondes.")
+        await ctx.send(f"Veuillez patienter {error.retry_after:.1f}s avant de lancer un autre suivi.")
 
-# Commandes pour les notifications Blazx
+# Commandes pour les notifications Blazx (inchangées)
 @bot.command(name='blazx')
 async def subscribe_blazx(ctx):
     subscription = {"user_id": ctx.author.id, "channel_id": ctx.channel.id, "streamer_login": "blazx", "last_status_online": False, "last_known_category": None}
@@ -258,7 +283,7 @@ async def unsubscribe_blazx(ctx):
     for sub in subs_to_remove: blazx_subscriptions.remove(sub)
     await ctx.send(f"☑️ C'est noté, {ctx.author.mention}. Vous ne recevrez plus de notifications pour Blazx ici.")
 
-# Commandes pour le contrôle du chat Twitch
+# Commandes pour le contrôle du chat Twitch (inchangées)
 @bot.command(name='motcle')
 @commands.has_permissions(administrator=True)
 async def watch_keyword(ctx, streamer: str = None, *, keyword: str = None):
@@ -277,6 +302,75 @@ async def stop_watcher(ctx):
     if hasattr(bot, 'twitch_bot'): await bot.twitch_bot.stop_task(); await ctx.send("✅ Surveillance Twitch arrêtée.")
 
 # --- SECTION 8 : TÂCHES DE FOND ---
+@tasks.loop(seconds=15) #+ Tâche de mise à jour des parties d'échecs
+async def update_live_games():
+    if not live_chess_sessions:
+        return
+
+    # On utilise une copie des clés pour pouvoir modifier le dict pendant l'itération
+    for channel_id in list(live_chess_sessions.keys()):
+        session_data = live_chess_sessions[channel_id]
+        
+        try:
+            headers = {"User-Agent": f"MonSuperBotDiscord/1.0 ({bot.user.name})"}
+            async with aiohttp.ClientSession() as session:
+                async with session.get(session_data["source_archive_url"], headers=headers, timeout=10) as response:
+                    if response.status != 200: continue
+                    games_data = await response.json()
+                    
+            # Retrouver la partie par son URL
+            current_game_data = next((g for g in games_data.get('games', []) if g.get('url') == session_data['game_url']), None)
+            
+            if not current_game_data or not current_game_data.get('pgn'):
+                continue
+            
+            new_pgn = current_game_data['pgn']
+            
+            # Si le PGN n'a pas changé, on ne fait rien
+            if len(new_pgn) == len(session_data['last_pgn']):
+                continue
+            
+            # --- Mise à jour de l'affichage ---
+            game = chess.pgn.read_game(StringIO(new_pgn))
+            board = game.board()
+            
+            is_finished = 'Result' in game.headers and game.headers['Result'] != '*'
+            
+            last_move = list(game.mainline().moves)[-1]
+            image_path = generate_board_image(board, last_move, session_data["player_pov"])
+            file = discord.File(image_path, filename=os.path.basename(image_path))
+            
+            embed = discord.Embed(
+                title=f"🔴 Suivi en direct : {game.headers.get('White')} vs {game.headers.get('Black')}",
+                url=game.headers.get('Link')
+            )
+            embed.set_image(url=f"attachment://{os.path.basename(image_path)}")
+            
+            if is_finished:
+                embed.title = f"🏁 Partie terminée : {game.headers.get('White')} vs {game.headers.get('Black')}"
+                embed.description = f"**Résultat : {game.headers.get('Result')}**"
+                embed.color = discord.Color.dark_red()
+            else:
+                last_move_san = board.san(last_move)
+                player_turn = "Blancs" if board.turn == chess.WHITE else "Noirs"
+                embed.description = f"Dernier coup : **{last_move_san}**"
+                embed.set_footer(text=f"Partie suivie pour {session_data['username']} | Au tour des {player_turn}")
+                embed.color = discord.Color.green()
+
+            await session_data['message'].edit(embed=embed, attachments=[file])
+            os.remove(image_path)
+
+            # Si la partie est terminée, on arrête le suivi
+            if is_finished:
+                del live_chess_sessions[channel_id]
+            else:
+                # Sinon, on met à jour le PGN
+                live_chess_sessions[channel_id]['last_pgn'] = new_pgn
+
+        except Exception as e:
+            print(f"Erreur dans la boucle update_live_games pour le salon {channel_id}: {e}")
+
+
 @tasks.loop(minutes=1)
 async def check_blazx_status():
     if not blazx_subscriptions: return
@@ -313,7 +407,9 @@ async def on_ready():
     print("-------------------------------------------------")
     print(f"Bot Discord '{bot.user.name}' connecté.")
     check_blazx_status.start()
+    update_live_games.start() #+ Démarrage de la nouvelle tâche
     print("[API] Tâche de surveillance pour Blazx activée.")
+    print("[API] Tâche de surveillance pour Chess.com activée.") #+
     print("-------------------------------------------------")
 
 async def main():
