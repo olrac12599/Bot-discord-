@@ -43,15 +43,51 @@ class ScrapingError(Exception):
 async def handle_potential_blockers(page, context_description=""):
     """
     Tente de détecter et de gérer les pop-ups ou éléments bloquants courants.
-    Ceci simule une "intelligence" qui essaie de comprendre la page.
+    Cette version met l'accent sur la robustesse du clic sur "I Accept".
     """
     print(f"[{context_description}] AI-like blocker handler: Checking for common pop-ups...")
 
-    # --- TENTER DE GÉRER LES POP-UPS DANS DES IFRAMES (FRÉQUENT POUR LES COOKIES) ---
+    # --- TENTER DE GÉRER LE BOUTON "I ACCEPT" AVEC PRIORITÉ ---
+    # Cette approche essaie de trouver le texte "I Accept" directement sur la page,
+    # en ignorant la structure HTML si nécessaire, et en forçant le clic.
+    try:
+        # Sélecteurs les plus probables pour "I Accept" basé sur le texte visible
+        accept_locators = [
+            page.get_by_text("I Accept", exact=True), # Recherche exacte du texte
+            page.get_by_role("button", name="I Accept"), # Recherche par rôle et nom
+            page.locator('button:has-text("I Accept")'), # Sélecteur CSS/XPath avec texte
+            page.get_by_text("J'accepte", exact=True), # Pour la version française
+            page.get_by_role("button", name="J'accepte"),
+            page.locator('button:has-text("J\'accepte")')
+        ]
+
+        for i, locator in enumerate(accept_locators):
+            print(f"[{context_description}] Trying 'I Accept' locator strategy {i+1}...")
+            try:
+                # Tenter d'attendre que l'élément soit visible avec un timeout généreux
+                # strict=False permet de ne pas échouer si plusieurs éléments correspondent (on prendra le premier)
+                await locator.wait_for(state='visible', timeout=10000) # Attendre jusqu'à 10 secondes
+                print(f"[{context_description}] 'I Accept' button found visible with strategy {i+1}.")
+                
+                # Cliquer sur l'élément. force=True ignore les checks de Playwright.
+                # trial=True permet de simuler un clic pour voir si ça marche
+                await locator.click(force=True, timeout=5000) 
+                print(f"[{context_description}] Successfully clicked 'I Accept' with strategy {i+1}.")
+                await asyncio.sleep(2) # Laisser le temps au pop-up de se fermer
+                return True # Blocage géré avec succès
+            except PlaywrightTimeoutError:
+                print(f"[{context_description}] 'I Accept' button not visible with strategy {i+1} within timeout.")
+            except Exception as e_click:
+                print(f"[{context_description}] Error clicking 'I Accept' button with strategy {i+1}: {e_click}")
+        
+    except Exception as e_accept:
+        print(f"[{context_description}] General error attempting to click 'I Accept': {e_accept}")
+
+    # --- TENTER DE GÉRER LES POP-UPS DANS DES IFRAMES (SI "I ACCEPT" N'EST PAS TROUVÉ DIRECTEMENT) ---
     iframe_selectors = [
-        'iframe[title*="Privacy"], iframe[name*="privacy"]', # Common iframe titles/names for privacy
-        'iframe[src*="privacy-policy"], iframe[src*="cookie-consent"]', # Common iframe src
-        'iframe' # General iframe, could be too broad
+        'iframe[title*="Privacy"], iframe[name*="privacy"]',
+        'iframe[src*="privacy-policy"], iframe[src*="cookie-consent"]',
+        'iframe' # Général, en dernier recours
     ]
 
     for iframe_selector in iframe_selectors:
@@ -62,42 +98,26 @@ async def handle_potential_blockers(page, context_description=""):
                 if iframe:
                     print(f"[{context_description}] Found potential iframe: {iframe_selector}. Checking for cookie button inside.")
                     try:
-                        # Sélecteur ciblant le bouton "I Accept" dans l'iframe
+                        # Re-tenter les mêmes sélecteurs à l'intérieur de l'iframe
                         accept_cookies_button_in_iframe = iframe.locator('button:has-text("I Accept"), button:has-text("J\'accepte"), button[aria-label="Accept cookies"]')
                         
-                        if await accept_cookies_button_in_iframe.is_visible(timeout=3000):
-                            print(f"[{context_description}] Found 'I Accept' button inside iframe. Clicking.")
-                            await accept_cookies_button_in_iframe.click()
-                            await asyncio.sleep(2)
-                            return True # Blocage géré
+                        await accept_cookies_button_in_iframe.wait_for(state='visible', timeout=5000)
+                        print(f"[{context_description}] Found 'I Accept' button inside iframe. Clicking.")
+                        await accept_cookies_button_in_iframe.click(force=True)
+                        await asyncio.sleep(2)
+                        return True
                     except PlaywrightTimeoutError:
-                        pass # Bouton non trouvé dans cet iframe
+                        pass
                     except Exception as e_iframe_btn:
                         print(f"[{context_description}] Error clicking button in iframe: {e_iframe_btn}")
         except PlaywrightTimeoutError:
-            pass # Pas d'iframe trouvé avec ce sélecteur
+            pass
         except Exception as e_iframe:
             print(f"[{context_description}] Error locating/accessing iframe {iframe_selector}: {e_iframe}")
 
-
-    # --- TENTER DE GÉRER LES POP-UPS DIRECTEMENT SUR LA PAGE PRINCIPALE ---
-    # Tenter de gérer les pop-ups de consentement aux cookies
+    # --- TENTER DE GÉRER LES POP-UPS DE NEWSLETTER OU AUTRES MODALES GÉNÉRIQUES (SI "I ACCEPT" EST INTROUVABLE) ---
     try:
-        accept_cookies_button_main_page = page.locator('button:has-text("I Accept"), button:has-text("J\'accepte"), button[aria-label="Accept cookies"], a[href*="cookie-policy"] >> xpath=.. >> button:has-text("Accept")')
-        if await accept_cookies_button_main_page.is_visible(timeout=3000):
-            print(f"[{context_description}] Found cookie consent pop-up on main page. Clicking 'Accept'.")
-            # Utiliser force=True si des overlays temporaires empêchent le clic normal
-            await accept_cookies_button_main_page.click(force=True) 
-            await asyncio.sleep(1)
-            return True
-    except PlaywrightTimeoutError:
-        pass
-    except Exception as e:
-        print(f"[{context_description}] Error handling main page cookie pop-up: {e}")
-
-    # Tenter de gérer les pop-ups de newsletter ou autres modales génériques
-    try:
-        close_button = page.locator('button[aria-label="close"], button:has-text("No Thanks"), button:has-text("Not now"), .modal-close-button, .close-button, div[role="dialog"] >> button:has-text("No Thanks")')
+        close_button = page.locator('button[aria-label="close"], button:has-text("No Thanks"), button:has-text("Not now"), .modal-close-button, .close-button, div[role="dialog"] >> button:has-text("No Thanks"), .x-button-icon')
         if await close_button.is_visible(timeout=2000):
             print(f"[{context_description}] Found generic pop-up. Clicking close/dismiss button.")
             await close_button.click(force=True)
@@ -108,10 +128,8 @@ async def handle_potential_blockers(page, context_description=""):
     except Exception as e:
         print(f"[{context_description}] Error handling generic pop-up: {e}")
 
-    # Autres vérifications spécifiques à Chess.com ou autres sites
+    # Autres vérifications spécifiques à Chess.com (si les autres ont échoué)
     try:
-        # Assurez-vous que ces sélecteurs sont spécifiques et n'affecteront pas d'autres éléments.
-        # Par exemple, un modal qui dit "Bienvenue à Chess.com" ou "Nouvelle fonctionnalité"
         welcome_modal_close = page.locator('.modal-dialog:has-text("Welcome to Chess.com") button[aria-label="close"], .modal-dialog:has-text("New Feature") button[aria-label="close"], button.btn-close-x')
         if await welcome_modal_close.is_visible(timeout=1000):
             print(f"[{context_description}] Found Chess.com specific welcome/feature pop-up. Closing it.")
@@ -148,10 +166,14 @@ async def get_pgn_from_chess_com(url: str, username: str, password: str):
 
             # --- DÉBUT DE L'INTERVENTION DE L'IA ---
             await asyncio.sleep(2) # Attente initiale pour les popups immédiats
-            await handle_potential_blockers(page, "Before Login Attempt")
+            # Tenter de gérer les bloqueurs avant la connexion, avec un focus sur "I Accept"
+            handled_blocker = await handle_potential_blockers(page, "Before Login Attempt")
+            if handled_blocker:
+                print("Potential blocker handled. Giving page time to settle.")
+                await asyncio.sleep(2) # Attendre un peu si un bloqueur a été géré
 
             print("Waiting 5 seconds before login action...")
-            await asyncio.sleep(5)
+            await asyncio.sleep(5) # Attente demandée
 
             login_successful = False
             for attempt in range(3):
@@ -210,7 +232,7 @@ async def get_pgn_from_chess_com(url: str, username: str, password: str):
                 await browser.close()
             raise ScrapingError(f"Scraping failed: {e}", screenshot_bytes, video_path)
 
-# --- STOCKFISH ANALYSE ---
+# --- STOCKFISH ANALYSE (INCHANGÉ) ---
 def analyse_pgn_with_stockfish(pgn_text):
     try:
         stockfish = Stockfish(path=STOCKFISH_PATH)
@@ -265,7 +287,7 @@ def analyse_pgn_with_stockfish(pgn_text):
 
     return annotations
 
-# --- DISCORD COMMANDES ---
+# --- DISCORD COMMANDES (INCHANGÉES) ---
 @bot.command(name="chess")
 async def get_chess_pgn(ctx, url: str):
     if "chess.com/game/live/" not in url and "chess.com/play/game/" not in url:
@@ -322,7 +344,7 @@ async def send_last_video(ctx):
                        f"({video_file.stat().st_size / (1024 * 1024):.2f} Mo). "
                        "La limite est de 8 Mo.")
 
-# --- TWITCH MIRROR OPTIONNEL ---
+# --- TWITCH MIRROR OPTIONNEL (INCHANGÉ) ---
 class WatcherMode(Enum):
     IDLE = auto()
     KEYWORD = auto()
