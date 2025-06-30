@@ -1,4 +1,4 @@
-# --- IMPORTS ---
+--- IMPORTS ---
 import discord
 from discord.ext import commands
 from twitchio.ext import commands as twitch_commands
@@ -23,17 +23,20 @@ import sys # Pour sys.exit()
 
 # --- CONFIGURATION ---
 # Assurez-vous que ces variables d'environnement sont définies sur votre système
-# ou sur la plateforme d'hébergement (ex: Render.com).
+# ou sur la plateforme d'hébergement (ex: Railway.app).
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
 TTV_BOT_TOKEN = os.getenv("TTV_BOT_TOKEN")
 TTV_BOT_NICKNAME = os.getenv("TTV_BOT_NICKNAME")
 CHESS_USERNAME = os.getenv("CHESS_USERNAME")
 CHESS_PASSWORD = os.getenv("CHESS_PASSWORD")
 DISCORD_FILE_LIMIT_BYTES = 8 * 1024 * 1024 # Limite de taille de fichier Discord (8 Mo)
-STOCKFISH_PATH = "/usr/games/stockfish"  # Chemin par défaut pour Stockfish sur de nombreux systèmes Linux
+
+# Configuration pour Stockfish
+# Sur Railway, si Stockfish est installé via le Dockerfile dans /usr/games/, ce chemin est correct.
+STOCKFISH_PATH = "/usr/games/stockfish"
 
 # Configuration pour le stream vidéo
-# Utilise la variable PORT fournie par l'hébergeur (ex: Render) ou 5000 par défaut en local.
+# Railway fournira la variable PORT. Il est crucial que Flask écoute sur ce port.
 VIDEO_STREAM_PORT = int(os.getenv("PORT", 5000))
 VIDEO_WIDTH, VIDEO_HEIGHT = 1280, 720 # Résolution du navigateur et du stream
 FPS = 15 # Images par seconde pour le stream (réduire pour économiser des ressources)
@@ -42,7 +45,7 @@ DISPLAY_NUM = ":99" # Numéro d'affichage virtuel pour Xvfb (nécessaire sur les
 # Vérification des variables d'environnement critiques au démarrage
 if not all([DISCORD_TOKEN, TTV_BOT_NICKNAME, TTV_BOT_TOKEN, CHESS_USERNAME, CHESS_PASSWORD]):
     print("ERREUR: Variables d'environnement DISCORD_TOKEN, TTV_BOT_NICKNAME, TTV_BOT_TOKEN, CHESS_USERNAME ou CHESS_PASSWORD manquantes.")
-    print("Veuillez les définir avant de lancer le bot.")
+    print("Veuillez les définir avant de lancer le bot sur Railway.")
     sys.exit(1) # Quitte le programme si les variables sont manquantes
 
 # --- FLASK APP POUR LE STREAM ---
@@ -74,8 +77,8 @@ def video_feed():
 def run_flask_app():
     """
     Démarre l'application Flask sur l'hôte et le port spécifiés.
+    Important pour Railway: '0.0.0.0' et le port fourni par l'environnement.
     """
-    # Host '0.0.0.0' rend l'application accessible depuis l'extérieur du conteneur/serveur
     app.run(host='0.0.0.0', port=VIDEO_STREAM_PORT, debug=False)
 
 # --- INITIALISATION DISCORD ---
@@ -243,7 +246,6 @@ async def get_pgn_from_chess_com(url: str, username: str, password: str):
 
         # Thread pour lire les frames de FFmpeg et les mettre à jour pour le stream Flask
         def read_ffmpeg_output():
-            # CORRECTION DE LA LIGNE 246 : Utilisation de 'global' au lieu de 'nonlocal'
             global video_frame 
             bytes_per_frame = VIDEO_WIDTH * VIDEO_HEIGHT * 3 # 3 bytes per pixel for bgr24
             while True:
@@ -429,12 +431,27 @@ async def get_chess_pgn(ctx, url: str):
     if "chess.com/game/live/" not in url and "chess.com/play/game/" not in url:
         return await ctx.send("❌ URL invalide. Veuillez fournir une URL de partie Chess.com valide.")
     
-    # Construction de l'URL du stream pour l'utilisateur
-    # 'RENDER_EXTERNAL_HOSTNAME' est une variable d'environnement sur Render.com
-    # qui donne l'URL publique de votre service. 'localhost' est pour le test en local.
-    stream_host = os.getenv('RENDER_EXTERNAL_HOSTNAME', 'localhost')
-    stream_url = f"http://{stream_host}:{VIDEO_STREAM_PORT}/video_feed"
+    # --- IMPORTANT POUR RAILWAY ---
+    # Railway n'a pas de variable d'environnement comme RENDER_EXTERNAL_HOSTNAME.
+    # L'URL publique de ton service Railway est disponible sur le dashboard de ton projet.
+    # La meilleure pratique est de la définir comme une variable d'environnement dans Railway,
+    # par exemple 'RAILWAY_PUBLIC_URL', ou de demander à l'utilisateur de la récupérer manuellement.
     
+    # Option 1: Définir RAILWAY_PUBLIC_URL dans les variables d'environnement de ton service Railway
+    railway_public_url = os.getenv('RAILWAY_PUBLIC_URL') # ex: https://ton-projet-xxxxxxxxxx.up.railway.app
+    
+    if railway_public_url:
+        # En production sur Railway, le port n'est pas inclus dans l'URL publique fournie par Railway.
+        # Le proxy inverse de Railway gère le mappage du port 443 externe vers ton VIDEO_STREAM_PORT interne.
+        stream_url = f"{railway_public_url}/video_feed"
+    else:
+        # Pour les tests en local ou si RAILWAY_PUBLIC_URL n'est pas définie (fallback)
+        # Note: En local, le port est nécessaire. Sur Railway, le port est géré par leur proxy.
+        stream_url = f"http://localhost:{VIDEO_STREAM_PORT}/video_feed"
+        await ctx.send("⚠️ La variable d'environnement `RAILWAY_PUBLIC_URL` n'est pas définie. "
+                       "Assurez-vous de la définir sur votre tableau de bord Railway pour que le lien du stream fonctionne correctement en production.")
+
+
     await ctx.send(f"🕵️ Connexion Chess.com et récupération du PGN en cours... Cela peut prendre un moment.\n"
                    f"**💡 Vous pouvez suivre l'activité du bot en direct ici :** <{stream_url}>\n"
                    f"(Actualisez la page si le stream ne démarre pas immédiatement ou se fige. Le stream s'arrêtera à la fin de la tâche.)")
@@ -660,11 +677,7 @@ if __name__ == "__main__":
     try:
         asyncio.run(main())
     except KeyboardInterrupt:
-        # Gérer l'arrêt propre avec Ctrl+C
         print("Bot(s) stoppé(s) par l'utilisateur (Ctrl+C).")
-        # Ici, vous pourriez ajouter une logique pour s'assurer que FFmpeg et Xvfb sont tués
-        # mais le `finally` dans get_pgn_from_chess_com devrait déjà gérer la plupart des cas.
     except Exception as e:
         print(f"Une erreur fatale est survenue pendant l'exécution principale: {e}")
-        # En cas d'erreur fatale non gérée, assurez-vous de fermer Flask/autres
-        # sys.exit(1) # Quitter avec un code d'erreur
+
