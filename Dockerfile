@@ -1,8 +1,12 @@
-# Utiliser une image Python officielle (basée sur Debian)
 FROM python:3.11-slim
 
-# Installer les dépendances système nécessaires pour Playwright, Chromium et Selenium
+# Installer les dépendances système requises
 RUN apt-get update && apt-get install -y \
+    build-essential \
+    python3-dev \
+    libffi-dev \
+    libssl-dev \
+    ffmpeg \
     wget \
     curl \
     gnupg \
@@ -36,35 +40,21 @@ RUN apt-get update && apt-get install -y \
     fonts-symbola \
     chromium-driver \
     chromium \
-    ffmpeg \
     && rm -rf /var/lib/apt/lists/*
 
-# Mettre à jour ChromeDriver vers la version compatible avec Chromium installé (optionnel mais conseillé)
-RUN chromedriver --version
-
-# Installer les packages Python nécessaires
+# Copier le fichier requirements
 COPY requirements.txt /app/requirements.txt
+
+# Mettre à jour pip et installer les dépendances Python
+RUN pip install --upgrade pip
 RUN pip install --no-cache-dir -r /app/requirements.txt
 
 # Installer les navigateurs Playwright
 RUN playwright install --with-deps
 
-# Copier le code dans le container
 WORKDIR /app
 COPY . /app
 
-# Variables d'environnement (à adapter en prod, mieux via docker-compose ou variables d'env Docker)
 ENV PYTHONUNBUFFERED=1
-ENV DISCORD_TOKEN=""
-ENV TWITCH_CLIENT_ID=""
-ENV TWITCH_TOKEN=""
-ENV TTV_BOT_NICKNAME=""
-ENV TTV_BOT_TOKEN=""
-ENV CHESS_USERNAME=""
-ENV CHESS_PASSWORD=""
 
-# Expose le port si nécessaire (pas utile pour un bot Discord mais bon)
-EXPOSE 8080
-
-# Commande pour lancer le bot
 CMD ["python", "bot.py"]
