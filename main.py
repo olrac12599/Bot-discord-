@@ -32,11 +32,11 @@ def record_game(url, duration=10):
         chromedriver_autoinstaller.install()
 
         chrome_options = Options()
-# chrome_options.add_argument("--headless")
-chrome_options.add_argument("--no-sandbox")
-chrome_options.add_argument("--disable-dev-shm-usage")
-chrome_options.add_argument("--window-size=1280,720")
-chrome_options.add_argument(f"--user-data-dir=/tmp/selenium_profile_{time.time()}")  # 👈 ajoute cette ligne
+        # chrome_options.add_argument("--headless") # Cette ligne était déjà commentée
+        chrome_options.add_argument("--no-sandbox") # <<< Indentation corrigée ici
+        chrome_options.add_argument("--disable-dev-shm-usage") # <<< Indentation corrigée ici
+        chrome_options.add_argument("--window-size=1280,720") # <<< Indentation corrigée ici
+        chrome_options.add_argument(f"--user-data-dir=/tmp/selenium_profile_{time.time()}")  # <<< Indentation corrigée ici
         driver = webdriver.Chrome(options=chrome_options)
         print("[DEBUG] Navigateur lancé")
         driver.get(url)
