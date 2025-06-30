@@ -1,5 +1,6 @@
+python-chess
+stockfish
 discord.py
 twitchio
 playwright
 playwright-stealth
-Pillow
