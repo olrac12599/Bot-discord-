@@ -12,20 +12,23 @@ from discord.ext import commands
 from moviepy.editor import VideoFileClip
 from dotenv import load_dotenv
 
-# Charger les variables d’environnement depuis Railway (ou .env en local)
+# Charger les variables d'environnement
 load_dotenv()
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
 VIDEO_PATH = "recording.mp4"
 COMPRESSED_PATH = "compressed.mp4"
 
-# Initialiser le bot Discord
+# Configurer les intents Discord
 intents = discord.Intents.default()
+intents.message_content = True  # ✅ Permet de lire le contenu des messages
+
+# Initialiser le bot Discord
 bot = commands.Bot(command_prefix='!', intents=intents)
 
-# 📹 Fonction d'enregistrement de l'écran sur le site Chess.com
+# 📹 Fonction d'enregistrement d'une partie Chess.com via navigateur
 def record_game(url, duration=10):
     try:
-        # Auto-installer le bon ChromeDriver
+        # Auto-installer chromedriver
         chromedriver_autoinstaller.install()
 
         chrome_options = Options()
@@ -60,14 +63,14 @@ def record_game(url, duration=10):
 def compress_video():
     try:
         clip = VideoFileClip(VIDEO_PATH)
-        clip_resized = clip.resize(height=360)  # baisser la résolution
+        clip_resized = clip.resize(height=360)
         clip_resized.write_videofile(COMPRESSED_PATH, bitrate="500k", codec="libx264", audio=False)
         return COMPRESSED_PATH
     except Exception as e:
         print(f"[Erreur compress_video] {e}")
         return None
 
-# 📥 Commande !{game_id}
+# 📥 Commande !chess <game_id>
 @bot.command()
 async def chess(ctx, game_id: str):
     url = f"https://www.chess.com/game/live/{game_id}"
@@ -82,7 +85,7 @@ async def chess(ctx, game_id: str):
     else:
         await ctx.send("❌ Erreur lors de l'enregistrement.")
 
-# 🎥 Commande !cam
+# 🎬 Commande !cam pour envoyer la vidéo compressée
 @bot.command()
 async def cam(ctx):
     if not os.path.exists(VIDEO_PATH):
@@ -97,12 +100,12 @@ async def cam(ctx):
     if compressed and os.path.exists(compressed):
         size = os.path.getsize(compressed)
         if size < 8 * 1024 * 1024:
-            await ctx.send("🎬 Voici la vidéo compressée :", file=discord.File(compressed))
+            await ctx.send("🎥 Voici la vidéo compressée :", file=discord.File(compressed))
         else:
             await ctx.send("🚫 La vidéo reste trop grosse même après compression.")
     else:
         await ctx.send("❌ Erreur lors de la compression.")
 
-# 🚀 Lancer le bot
+# 🚀 Lancement du bot
 if __name__ == "__main__":
     bot.run(DISCORD_TOKEN)
