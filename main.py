@@ -1,16 +1,16 @@
-# --- SECTION 1 : IMPORTS ---
+# --- IMPORTS ---
 import discord
 from discord.ext import commands, tasks
 from twitchio.ext import commands as twitch_commands
 import requests
 import os
 import asyncio
-from enum import Enum, auto
 import chess
 import chess.pgn
 import io
+from enum import Enum, auto
 
-# --- SECTION 2 : CONFIGURATION ---
+# --- CONFIGURATION ---
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
 TWITCH_CLIENT_ID = os.getenv("TWITCH_CLIENT_ID")
 TWITCH_TOKEN = os.getenv("TWITCH_TOKEN")
@@ -20,53 +20,55 @@ TTV_BOT_TOKEN = os.getenv("TTV_BOT_TOKEN")
 if not all([DISCORD_TOKEN, TWITCH_CLIENT_ID, TWITCH_TOKEN, TTV_BOT_NICKNAME, TTV_BOT_TOKEN]):
     raise ValueError("ERREUR CRITIQUE: Variables d'environnement manquantes.")
 
-# --- SECTION 3 : INITIALISATION DES BOTS ---
+# --- INIT BOT DISCORD ---
 intents = discord.Intents.default()
 intents.message_content = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 
-# --- SECTION 4 : STOCKAGE ET CACHES ---
-blazx_subscriptions = []
+# --- STOCKAGE ---
+tracked_games = {}  # pour analyse échecs (par salon)
 streamer_id_cache = {}
-tracked_games = {}
 
-# --- SECTION 5 : FONCTIONS UTILITAIRES ---
+# --- FONCTIONS UTILES ---
 
-def get_chess_com_game_pgn(game_url: str) -> str:
-    """
-    Récupère le PGN d'une partie en direct Chess.com.
-    Renvoie une erreur si la partie est terminée (404) ou si l'URL est invalide.
-    """
+def get_live_game_moves(game_id):
+    url = f"https://api.chess.com/pub/game/live/{game_id}"
+    r = requests.get(url, timeout=5)
+    r.raise_for_status()
+    data = r.json()
+    if data.get("status") != "started":
+        raise RuntimeError("La partie est terminée ou indisponible.")
+    moves_str = data.get("moves", "")
+    moves = moves_str.split()
+    return moves
+
+def build_game_from_moves(moves):
+    game = chess.pgn.Game()
+    node = game
+    board = game.board()
+    for move_san in moves:
+        try:
+            move = board.parse_san(move_san)
+        except Exception:
+            break
+        board.push(move)
+        node = node.add_variation(move)
+    return game, board
+
+def get_lichess_evaluation(fen):
+    url = f"https://lichess.org/api/cloud-eval?fen={fen}"
     try:
-        if "/game/live/" not in game_url:
-            raise ValueError("❌ Cette commande ne fonctionne que pour les parties *en direct* de Chess.com.")
-
-        game_id = game_url.strip("/").split("/")[-1]
-        api_url = f"https://www.chess.com/game/live/pgn/{game_id}"
-        response = requests.get(api_url, timeout=5)
-
-        if response.status_code == 404:
-            raise RuntimeError("❌ La partie est déjà terminée — impossible de récupérer le PGN en direct.")
-
-        response.raise_for_status()
-        return response.text
-
-    except Exception as e:
-        raise RuntimeError(f"⚠️ Erreur récupération PGN : {e}")
-
-def get_lichess_evaluation(fen: str):
-    try:
-        api_url = f"https://lichess.org/api/cloud-eval?fen={fen}"
-        response = requests.get(api_url, timeout=5)
-        response.raise_for_status()
-        data = response.json()
+        r = requests.get(url, timeout=5)
+        r.raise_for_status()
+        data = r.json()
         if 'pvs' in data and data['pvs']:
-            if 'cp' in data['pvs'][0]:
-                return data['pvs'][0]['cp']
-            elif 'mate' in data['pvs'][0]:
-                return 10000 * (1 if data['pvs'][0]['mate'] > 0 else -1)
+            pvs0 = data['pvs'][0]
+            if 'cp' in pvs0:
+                return pvs0['cp']
+            elif 'mate' in pvs0:
+                return 10000 if pvs0['mate'] > 0 else -10000
         return None
-    except:
+    except Exception:
         return None
 
 def classify_move(eval_before, eval_after, turn):
@@ -81,7 +83,8 @@ def classify_move(eval_before, eval_after, turn):
     return None
 
 async def get_streamer_id(streamer_name: str) -> str | None:
-    if streamer_name in streamer_id_cache: return streamer_id_cache[streamer_name]
+    if streamer_name in streamer_id_cache:
+        return streamer_id_cache[streamer_name]
     headers = {"Client-ID": TWITCH_CLIENT_ID, "Authorization": f"Bearer {TWITCH_TOKEN}"}
     params = {"login": streamer_name.lower()}
     try:
@@ -102,11 +105,13 @@ async def get_stream_status(streamer_id: str) -> dict | None:
         r = requests.get("https://api.twitch.tv/helix/streams", headers=headers, params=params, timeout=5)
         r.raise_for_status()
         data = r.json()
-        if data.get("data"): return data["data"][0]
+        if data.get("data"):
+            return data["data"][0]
+        return None
     except:
         return None
 
-# --- SECTION 6 : BOTS TWITCH ---
+# --- CLASSE BOT TWITCH ---
 
 class WatcherMode(Enum):
     IDLE = auto()
@@ -154,7 +159,11 @@ class WatcherBot(twitch_commands.Bot):
 
         if self.mode == WatcherMode.KEYWORD:
             if self.keyword_to_watch.lower() in message.content.lower():
-                embed = discord.Embed(title="🚨 Mot-Clé Twitch détecté !", description=message.content, color=discord.Color.orange())
+                embed = discord.Embed(
+                    title="🚨 Mot-Clé Twitch détecté !",
+                    description=message.content,
+                    color=discord.Color.orange()
+                )
                 embed.set_footer(text=f"Chaîne : {message.channel.name} | Auteur : {message.author.name}")
                 await self.target_discord_channel.send(embed=embed)
 
@@ -162,36 +171,29 @@ class WatcherBot(twitch_commands.Bot):
             msg = f"**{message.author.name}**: {message.content}"
             await self.target_discord_channel.send(msg[:2000])
 
-# --- SECTION 7 : COMMANDES DISCORD ---
+# --- COMMANDES DISCORD ---
 
 @bot.command(name="chess")
 async def start_chess_analysis(ctx, url: str):
-    if "chess.com/game/live/" not in url:
-        await ctx.send("❌ URL de partie en direct Chess.com invalide.")
+    if "/game/live/" not in url:
+        await ctx.send("❌ URL de partie live Chess.com invalide.")
         return
-
+    game_id = url.strip("/").split("/")[-1]
     if ctx.channel.id in tracked_games:
-        await ctx.send("⏳ Analyse déjà en cours. Utilise `!stopchess` pour l'arrêter.")
+        await ctx.send("⏳ Une analyse est déjà en cours dans ce salon. Utilisez `!stopchess` pour l'arrêter.")
         return
-
-    try:
-        _ = get_chess_com_game_pgn(url)  # Teste la validité du PGN au lancement
-    except Exception as e:
-        await ctx.send(str(e))
-        return
-
-    await ctx.send("🧠 Analyse de la partie en cours... (toutes les 15 secondes)")
-    task = game_analysis_loop.start(ctx, url)
-    tracked_games[ctx.channel.id] = {'url': url, 'last_ply': 0, 'task': task}
+    tracked_games[ctx.channel.id] = {"game_id": game_id, "last_ply": 0}
+    game_analysis_loop.start(ctx)
+    await ctx.send(f"✅ Analyse commencée pour la partie live `{game_id}`. Mise à jour toutes les 15 secondes.")
 
 @bot.command(name="stopchess")
 async def stop_chess_analysis(ctx):
     if ctx.channel.id in tracked_games:
-        tracked_games[ctx.channel.id]['task'].cancel()
+        game_analysis_loop.cancel()
         del tracked_games[ctx.channel.id]
         await ctx.send("⏹️ Analyse arrêtée.")
     else:
-        await ctx.send("Aucune analyse active ici.")
+        await ctx.send("Aucune analyse active dans ce salon.")
 
 @bot.command(name="motcle")
 @commands.has_permissions(administrator=True)
@@ -214,66 +216,68 @@ async def stop_twitch_watch(ctx):
         await bot.twitch_bot.stop_task()
         await ctx.send("🛑 Surveillance Twitch arrêtée.")
 
-# --- SECTION 8 : TÂCHES FOND : ANALYSE ÉCHECS ---
+@bot.command(name="ping")
+async def ping(ctx):
+    await ctx.send("Pong!")
+
+# --- TÂCHE D'ANALYSE ÉCHECS ---
 
 @tasks.loop(seconds=15)
-async def game_analysis_loop(ctx, game_url):
+async def game_analysis_loop(ctx):
     cid = ctx.channel.id
-    if cid not in tracked_games or tracked_games[cid]['url'] != game_url:
-        game_analysis_loop.stop()
+    if cid not in tracked_games:
+        game_analysis_loop.cancel()
         return
+    game_id = tracked_games[cid]["game_id"]
 
     try:
-        pgn_data = get_chess_com_game_pgn(game_url)
-        pgn_stream = io.StringIO(pgn_data)
-        game = chess.pgn.read_game(pgn_stream)
-        if not game: return
+        moves = get_live_game_moves(game_id)
+        game, board = build_game_from_moves(moves)
+        last_ply = tracked_games[cid]["last_ply"]
+        current_ply = len(moves)
 
-        board = game.board()
-        current_ply = 0
-        last_ply = tracked_games[cid]['last_ply']
+        # Analyser uniquement les coups nouveaux
+        for i in range(last_ply, current_ply):
+            board_tmp = chess.Board()
+            for j in range(i):
+                move = board_tmp.parse_san(moves[j])
+                board_tmp.push(move)
 
-        for move in game.mainline_moves():
-            current_ply += 1
-            if current_ply <= last_ply:
-                board.push(move)
-                continue
+            fen_before = board_tmp.fen()
+            turn = board_tmp.turn
 
-            fen_before = board.fen()
-            turn = board.turn
+            move_san = moves[i]
+            move = board_tmp.parse_san(move_san)
+            board_tmp.push(move)
+
             eval_before = get_lichess_evaluation(fen_before)
-
-            san_move = board.san(move)
-            board.push(move)
-
-            eval_after = get_lichess_evaluation(board.fen())
-            tracked_games[cid]['last_ply'] = current_ply
+            eval_after = get_lichess_evaluation(board_tmp.fen())
 
             if eval_before is not None and eval_after is not None:
                 quality = classify_move(eval_before, eval_after, turn)
                 if quality:
                     player = game.headers["White"] if turn == chess.WHITE else game.headers["Black"]
-                    await ctx.send(
-                        f"**{int((current_ply+1)/2)}. {san_move}** par **{player}** – {quality} "
-                        f"(Éval : {eval_before/100:.2f} ➜ {eval_after/100:.2f})"
-                    )
+                    ply_num = i+1
+                    await ctx.send(f"**{(ply_num+1)//2}. {move_san}** par **{player}** – {quality} (Eval: {eval_before/100:.2f} ➜ {eval_after/100:.2f})")
 
-        if game.headers.get("Result") != "*":
-            await ctx.send(f"🎯 Partie terminée : {game.headers['Result']}")
-            tracked_games[cid]['task'].cancel()
-            del tracked_games[cid]
+        tracked_games[cid]["last_ply"] = current_ply
 
+    except RuntimeError as e:
+        await ctx.send(f"⚠️ {e} Analyse arrêtée.")
+        tracked_games.pop(cid, None)
+        game_analysis_loop.cancel()
     except Exception as e:
-        await ctx.send(f"⚠️ Erreur analyse : {e}")
-        if cid in tracked_games:
-            tracked_games[cid]['task'].cancel()
-            del tracked_games[cid]
+        await ctx.send(f"⚠️ Erreur durant l'analyse : {e}")
+        tracked_games.pop(cid, None)
+        game_analysis_loop.cancel()
 
-# --- SECTION 9 : LANCEMENT ---
+# --- ÉVÉNEMENTS ---
 
 @bot.event
 async def on_ready():
-    print(f"Bot Discord connecté en tant que {bot.user.name}")
+    print(f"Bot Discord connecté en tant que {bot.user} !")
+
+# --- LANCEMENT ---
 
 async def main():
     twitch_bot_instance = WatcherBot(bot)
