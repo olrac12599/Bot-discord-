@@ -1,19 +1,10 @@
-# Dockerfile optimisé pour un bot Python avec Playwright, Xvfb, FFmpeg et Flask (streaming)
-
-# Utilise une image Python de base plus spécifique (Debian Bookworm) pour la stabilité
+# Utilise une image Python officielle Debian Bookworm slim
 FROM python:3.11-slim-bookworm
 
-# Définit le répertoire de travail pour toutes les opérations
+# Définir dossier de travail
 WORKDIR /app
 
-# Étape 1 : Installer les dépendances système nécessaires
-# J'ai regroupé et optimisé l'installation des paquets.
-# --no-install-recommends: Réduit la taille de l'image en n'installant pas les paquets "recommandés".
-# xvfb: Serveur d'affichage virtuel.
-# ffmpeg: Pour la capture et le traitement vidéo.
-# Tuttes les autres libs sont des dépendances courantes pour Chromium headless.
-# ca-certificates: Important pour les requêtes HTTPS.
-# libxtst6: Souvent nécessaire pour les interactions IHM dans Xvfb (pour le mouvement de souris, etc.)
+# Installer les dépendances système nécessaires (pour Playwright + Stockfish + ffmpeg + Xvfb)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     wget \
@@ -36,39 +27,30 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libpng-dev \
     libtiff-dev \
     libwebp-dev \
-    libxtst6 \
-    # Installe stockfish - il est recommandé de l'installer au niveau système
     stockfish \
-    # Nettoie le cache APT pour réduire la taille de l'image Docker finale
     && rm -rf /var/lib/apt/lists/*
 
-# Étape 2 : Installer Node.js (requis par Playwright)
-# Méthode simplifiée et plus robuste pour les images slim-bookworm.
-# Elle utilise le script d'installation de NodeSource via curl et bash.
-# Nous utiliserons Node.js 20.x, qui est une version LTS (support à long terme).
+# Installer Node.js (nécessaire pour Playwright)
 RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - && \
     apt-get install -y nodejs && \
     npm install -g npm@latest && \
-    rm -f /etc/apt/sources.list.d/nodesource.list # Nettoyage après l'installation
+    rm -f /etc/apt/sources.list.d/nodesource.list
 
-# Étape 3 : Installer Playwright Python et les navigateurs (Chromium).
-# Copie requirements.txt AVANT d'installer Playwright et les dépendances pour la mise en cache de Docker.
+# Copier requirements.txt et installer les dépendances Python
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# La commande `playwright install` sans "--with-deps" suffit ici
-# car nous avons installé toutes les dépendances système dans l'Étape 1.
+# Installer les navigateurs Playwright (Chromium)
 RUN playwright install chromium
 
-# Étape 4 : Copier le reste de votre code source dans le conteneur.
-# Ceci doit être fait APRÈS l'installation de toutes les dépendances pour optimiser le cache de Docker.
+# Copier tout le code source
 COPY . .
 
-# Étape 5 : Définir la variable d'environnement DISPLAY pour Xvfb.
+# Variable d'environnement DISPLAY (pour Xvfb)
 ENV DISPLAY=:99
 
-# Étape 6 : Exposer le port pour l'application Flask.
+# Exposer le port pour Flask si tu l'utilises (ou ignore si pas besoin)
 EXPOSE 5000
 
-# Étape 7 : Définir la commande qui sera exécutée lorsque le conteneur démarre.
+# Commande au démarrage du conteneur
 CMD ["python", "main.py"]
