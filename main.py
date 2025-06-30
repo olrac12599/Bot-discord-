@@ -68,7 +68,7 @@ async def get_stream_status(streamer_id: str) -> dict | None:
 
 async def find_live_game(session: aiohttp.ClientSession, username: str) -> dict | None:
     """Trouve la partie en direct d'un joueur sur Chess.com."""
-    api_url = f"https://api.chess.com/pub/player/{username}/games/archives"
+    api_url = f"https://api.chess.com/pub/player/{username}/games/2025/06"
     headers = {"User-Agent": f"MonSuperBotDiscord/1.0 ({bot.user.name})"}
     try:
         async with session.get(api_url, headers=headers, timeout=10) as archives_response:
