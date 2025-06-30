@@ -15,11 +15,14 @@ import discord
 from discord.ext import commands
 import twitchio
 from twitchio.ext import commands as twitch_commands
-from playwright.async_api import async_playwright, Page, TimeoutError
-from playwright_stealth import stealth_async as Stealth
+from playwright.async_api import async_playwright, Page, TimeoutError # Importation corrigée ici (TimeoutError)
+from playwright_stealth import Stealth # Importation corrigée ici (Stealth)
 import chess.pgn
 from stockfish import Stockfish
 from flask import Flask, Response
+
+# ... (le reste de votre code main.py) ...
+
 
 # --- CONFIGURATION DES LOGS ---
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
