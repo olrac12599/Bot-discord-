@@ -7,10 +7,11 @@ import asyncio
 from enum import Enum, auto
 from playwright.async_api import async_playwright, TimeoutError as PlaywrightTimeoutError
 import io
-from PIL import Image
 from pathlib import Path
 
 # --- CONFIGURATION ---
+# Assurez-vous que vos variables d'environnement sont bien définies
+# dans votre système ou dans un fichier .env chargé au préalable.
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
 TWITCH_CLIENT_ID = os.getenv("TWITCH_CLIENT_ID")
 TWITCH_TOKEN = os.getenv("TWITCH_TOKEN")
@@ -20,12 +21,13 @@ CHESS_USERNAME = os.getenv("CHESS_USERNAME")
 CHESS_PASSWORD = os.getenv("CHESS_PASSWORD")
 DISCORD_FILE_LIMIT_BYTES = 8 * 1024 * 1024  # 8 Mo
 
+# --- VÉRIFICATION DE LA CONFIGURATION ---
 if not all([DISCORD_TOKEN, TWITCH_CLIENT_ID, TWITCH_TOKEN, TTV_BOT_NICKNAME, TTV_BOT_TOKEN]):
     raise ValueError("ERREUR CRITIQUE: Variables d'environnement Twitch/Discord manquantes.")
 if not all([CHESS_USERNAME, CHESS_PASSWORD]):
     raise ValueError("ERREUR CRITIQUE: CHESS_USERNAME et CHESS_PASSWORD doivent être définis.")
 
-# --- INIT BOT DISCORD ---
+# --- INITIALISATION DU BOT DISCORD ---
 intents = discord.Intents.default()
 intents.message_content = True
 bot = commands.Bot(command_prefix="!", intents=intents)
@@ -39,10 +41,10 @@ class ScrapingError(Exception):
         self.video_path = video_path
 
 
-# --- FONCTION DE SCRAPING MISE À JOUR ---
+# --- FONCTION DE SCRAPING CHESS.COM ---
 async def get_pgn_from_chess_com(url: str, username: str, password: str) -> str:
     """
-    Se connecte à Chess.com de manière plus robuste avec des délais et des tentatives multiples,
+    Se connecte à Chess.com de manière robuste avec des délais et des tentatives multiples,
     et enregistre une vidéo de la session pour le débogage.
     """
     videos_dir = Path("debug_videos")
@@ -54,8 +56,6 @@ async def get_pgn_from_chess_com(url: str, username: str, password: str) -> str:
         context = await browser.new_context(
             record_video_dir=str(videos_dir),
             record_video_size={"width": 1280, "height": 720},
-            # On augmente le timeout par défaut pour les actions
-            # pour donner plus de temps au site de réagir
             base_url="https://www.chess.com"
         )
         page = await context.new_page()
@@ -66,50 +66,40 @@ async def get_pgn_from_chess_com(url: str, username: str, password: str) -> str:
             for attempt in range(max_retries):
                 print(f"Tentative de connexion n°{attempt + 1}/{max_retries}...")
                 await page.goto("/login_and_go", timeout=90000)
-
-                # Attendre que la page soit prête
                 await page.wait_for_load_state('domcontentloaded')
 
-                # Accepter les cookies si présents
                 try:
                     await page.get_by_role("button", name="I Accept").click(timeout=5000)
                     print("Cookies acceptés.")
                 except PlaywrightTimeoutError:
                     print("Aucune bannière de cookies détectée ou déjà acceptée.")
 
-                # Utiliser .type() pour simuler une saisie humaine
                 await page.get_by_placeholder("Username, Phone, or Email").type(username, delay=50)
                 await page.get_by_placeholder("Password").type(password, delay=50)
                 await page.get_by_role("button", name="Log In").click()
                 
-                # Attendre de voir si on atterrit sur la page d'accueil OU si l'erreur s'affiche
                 try:
-                    # Scénario 1: Succès ! On est redirigé vers la page d'accueil
                     await page.wait_for_url("**/home", timeout=15000)
                     print("Connexion réussie !")
                     login_successful = True
-                    break  # Sortir de la boucle for
+                    break
 
                 except PlaywrightTimeoutError:
-                    # Scénario 2: Échec. On vérifie si le message d'erreur est visible.
                     error_message_visible = await page.is_visible("text=This password is incorrect")
                     if error_message_visible:
                         print(f"Erreur de mot de passe détectée. Nouvelle tentative ({attempt + 1}/{max_retries})...")
-                        # La boucle va continuer pour la prochaine tentative
                         continue
                     else:
-                        # Une autre erreur inattendue s'est produite
                         raise ScrapingError("Une erreur inattendue est survenue après la tentative de connexion.")
 
             if not login_successful:
                 raise ScrapingError(f"Échec de la connexion après {max_retries} tentatives. Vérifiez vos identifiants.")
 
-            # --- Le reste du scraping ---
+            # --- SCRAPING DU PGN ---
             print(f"Navigation vers l'URL de la partie : {url}")
             await page.goto(url, timeout=90000)
             
             print("Clic sur le bouton de partage...")
-            # On utilise un sélecteur plus précis pour le bouton de partage
             await page.locator("button.share-button-component").click(timeout=30000)
             
             print("Clic sur l'onglet PGN...")
@@ -123,10 +113,9 @@ async def get_pgn_from_chess_com(url: str, username: str, password: str) -> str:
             return pgn_text
 
         except Exception as e:
-            # La gestion d'erreur reste la même pour récupérer la vidéo
             print(f"ERREUR: Une erreur de scraping est survenue. Détails: {e}")
-            screenshot_bytes = None
             video_path = None
+            screenshot_bytes = None
             try:
                 video_path = await page.video.path()
             except Exception:
@@ -135,64 +124,14 @@ async def get_pgn_from_chess_com(url: str, username: str, password: str) -> str:
                 screenshot_bytes = await page.screenshot(full_page=True)
             await context.close()
             await browser.close()
-            # On s'assure de propager notre exception personnalisée
+            
             if isinstance(e, ScrapingError):
-                raise e # On relance l'exception existante avec ses détails
+                raise ScrapingError(e, screenshot_bytes=screenshot_bytes, video_path=video_path)
             else:
                 raise ScrapingError(f"Détails: {e}", screenshot_bytes=screenshot_bytes, video_path=video_path)
 
 
-# --- COMMANDE DISCORD MISE À JOUR ---
-@bot.command(name="chess")
-async def get_chess_pgn(ctx, url: str):
-    # La validation d'URL est bonne, on la garde
-    if not ("chess.com/game/live/" in url or "chess.com/play/game/" in url):
-        await ctx.send("❌ URL invalide. L'URL doit provenir d'une partie sur Chess.com.")
-        return
-        
-    msg = await ctx.send("🌐 **Lancement du scraping...** Je vais tenter de me connecter à Chess.com.")
-
-    try:
-        # CORRECTION IMPORTANTE : L'ordre des arguments est maintenant url, username, password
-        pgn = await get_pgn_from_chess_com(url, CHESS_USERNAME, CHESS_PASSWORD)
-        
-        # Le reste de la logique pour envoyer le PGN est bon
-        if len(pgn) > 1900:
-            pgn_short = pgn[:1900] + "..."
-        else:
-            pgn_short = pgn
-        await msg.edit(content=f"✅ **PGN récupéré avec succès !**\n```\n{pgn_short}\n```")
-
-    except ScrapingError as e:
-        # La gestion d'erreur est déjà bien faite, on la garde
-        await msg.edit(content=f"❌ **Erreur lors de la récupération du PGN.** Analyse des fichiers de débogage en cours...")
-        
-        files_to_send = []
-        if e.screenshot_bytes:
-            files_to_send.append(discord.File(io.BytesIO(e.screenshot_bytes), filename="debug_screenshot.png"))
-
-        if e.video_path:
-            video_file = Path(e.video_path)
-            if video_file.exists():
-                file_size = video_file.stat().st_size
-                if file_size < DISCORD_FILE_LIMIT_BYTES:
-                    # On envoie la vidéo dans un message séparé pour plus de clarté
-                    await ctx.send(f"📹 Voici la vidéo de la session qui a échoué :", file=discord.File(str(video_file), filename="debug_video.webm"))
-                else:
-                    await ctx.send(f"📹 La vidéo de débogage a été enregistrée mais est trop lourde ({file_size / 1_000_000:.2f} Mo) pour être envoyée sur Discord.")
-        
-        # On envoie le message d'erreur principal avec la capture d'écran si elle existe
-        if files_to_send:
-             await ctx.send(f"❌ **Erreur de scraping :** {e}", files=files_to_send)
-        else:
-            await ctx.send(f"❌ **Erreur de scraping :** {e} (Aucun fichier de débogage n'a pu être généré).")
-
-
-    except Exception as e:
-        await msg.edit(content=f"❌ Une erreur système imprévue est survenue : {e}")
-
-
-# --- CLASSE BOT TWITCH ---
+# --- CLASSE DU BOT TWITCH ---
 class WatcherMode(Enum):
     IDLE, KEYWORD, MIRROR = auto(), auto(), auto()
 
@@ -215,6 +154,7 @@ class WatcherBot(twitch_commands.Bot):
         self.current_channel_name = None
         self.target_discord_channel = None
         self.keyword_to_watch = None
+        print("Surveillance Twitch arrêtée.")
 
     async def start_keyword_watch(self, twitch_channel, keyword, discord_channel):
         await self.stop_task()
@@ -223,6 +163,7 @@ class WatcherBot(twitch_commands.Bot):
         self.target_discord_channel = discord_channel
         self.current_channel_name = twitch_channel.lower()
         await self.join_channels([self.current_channel_name])
+        print(f"Surveillance du mot-clé '{keyword}' activée sur la chaîne '{self.current_channel_name}'.")
 
     async def start_mirror(self, twitch_channel, discord_channel):
         await self.stop_task()
@@ -230,17 +171,21 @@ class WatcherBot(twitch_commands.Bot):
         self.target_discord_channel = discord_channel
         self.current_channel_name = twitch_channel.lower()
         await self.join_channels([self.current_channel_name])
+        print(f"Mode miroir activé pour la chaîne '{self.current_channel_name}'.")
 
     async def event_message(self, message):
         if message.echo or self.mode == WatcherMode.IDLE:
             return
+        
+        author_name = message.author.name if message.author else "Quelqu'un"
+        
         if self.mode == WatcherMode.KEYWORD:
             if self.keyword_to_watch.lower() in message.content.lower():
                 embed = discord.Embed(title="🚨 Mot-Clé Twitch détecté !", description=message.content, color=discord.Color.orange())
-                embed.set_footer(text=f"Chaîne : {message.channel.name} | Auteur : {message.author.name}")
+                embed.set_footer(text=f"Chaîne : {message.channel.name} | Auteur : {author_name}")
                 await self.target_discord_channel.send(embed=embed)
         elif self.mode == WatcherMode.MIRROR:
-            msg = f"**{message.author.name}**: {message.content}"
+            msg = f"**{author_name}**: {message.content}"
             await self.target_discord_channel.send(msg[:2000])
 
 
@@ -248,60 +193,60 @@ class WatcherBot(twitch_commands.Bot):
 @bot.command(name="chess")
 async def get_chess_pgn(ctx, url: str):
     if not ("chess.com/game/live/" in url or "chess.com/play/game/" in url):
-        await ctx.send("❌ URL invalide.")
+        await ctx.send("❌ URL invalide. L'URL doit provenir d'une partie sur Chess.com.")
         return
         
-    msg = await ctx.send("🌐 Lancement du scraping... Connexion à Chess.com en cours...")
+    msg = await ctx.send("🌐 **Lancement du scraping...** Je vais tenter de me connecter à Chess.com.")
 
     try:
-        pgn = await get_pgn_from_chess_com(CHESS_USERNAME, CHESS_PASSWORD, url)
+        pgn = await get_pgn_from_chess_com(url, CHESS_USERNAME, CHESS_PASSWORD)
+        
         if len(pgn) > 1900:
             pgn_short = pgn[:1900] + "..."
         else:
             pgn_short = pgn
-        await msg.edit(content=f"✅ PGN récupéré !\n```\n{pgn_short}\n```")
+        await msg.edit(content=f"✅ **PGN récupéré avec succès !**\n```\n{pgn_short}\n```")
 
     except ScrapingError as e:
-        await msg.edit(content=f"❌ Erreur lors de la récupération du PGN. Analyse des fichiers de débogage...")
+        await msg.edit(content=f"❌ **Erreur lors de la récupération du PGN.**")
         
         files_to_send = []
         if e.screenshot_bytes:
-            # La logique de compression pourrait être ajoutée ici si nécessaire
             files_to_send.append(discord.File(io.BytesIO(e.screenshot_bytes), filename="debug_screenshot.png"))
 
+        # Envoyer d'abord l'erreur textuelle et la capture d'écran
+        if files_to_send:
+            await ctx.send(f"**Erreur de scraping :** {e}", files=files_to_send)
+        else:
+            await ctx.send(f"**Erreur de scraping :** {e}")
+
+        # Envoyer la vidéo séparément si elle existe
         if e.video_path:
             video_file = Path(e.video_path)
             if video_file.exists():
                 file_size = video_file.stat().st_size
                 if file_size < DISCORD_FILE_LIMIT_BYTES:
-                    files_to_send.append(discord.File(str(video_file), filename="debug_video.webm"))
-                    # On envoie un message séparé pour les fichiers pour éviter des erreurs
-                    await ctx.send(f"❌ **Erreur de scraping :** {e}", files=files_to_send)
+                    await ctx.send(f"📹 Voici la vidéo de la session qui a échoué :", file=discord.File(str(video_file), filename="debug_video.webm"))
                 else:
-                    await ctx.send(f"❌ **Erreur de scraping :** {e}\n📹 La vidéo de débogage a été enregistrée mais est trop lourde ({file_size / 1_000_000:.2f} Mo) pour être envoyée.", files=files_to_send)
-            else:
-                await ctx.send(f"❌ **Erreur de scraping :** {e}", files=files_to_send)
-        elif files_to_send:
-            await ctx.send(f"❌ **Erreur de scraping :** {e}", files=files_to_send)
-        else:
-            await ctx.send(f"❌ **Erreur de scraping :** {e} (Aucun fichier de débogage généré)")
-
+                    await ctx.send(f"📹 La vidéo de débogage est trop lourde ({file_size / 1_000_000:.2f} Mo) pour être envoyée sur Discord.")
+            
     except Exception as e:
-        await msg.edit(content=f"❌ Une erreur imprévue est survenue : {e}")
+        await msg.edit(content=f"❌ Une erreur système imprévue est survenue : {e}")
+
 
 @bot.command(name="motcle")
 @commands.has_permissions(administrator=True)
 async def watch_keyword(ctx, streamer: str, *, keyword: str):
     if hasattr(bot, 'twitch_bot'):
         await bot.twitch_bot.start_keyword_watch(streamer, keyword, ctx.channel)
-        await ctx.send(f"🔍 Mot-clé **{keyword}** sur **{streamer}** surveillé.")
+        await ctx.send(f"✅ Surveillance activée pour le mot-clé **`{keyword}`** sur la chaîne Twitch de **`{streamer}`**.")
 
 @bot.command(name="tchat")
 @commands.has_permissions(administrator=True)
 async def mirror_chat(ctx, streamer: str):
     if hasattr(bot, 'twitch_bot'):
         await bot.twitch_bot.start_mirror(streamer, ctx.channel)
-        await ctx.send(f"🪞 Miroir du tchat de **{streamer}** activé.")
+        await ctx.send(f"✅ Mode miroir activé pour le tchat de **`{streamer}`**.")
 
 @bot.command(name="stop")
 @commands.has_permissions(administrator=True)
@@ -312,7 +257,7 @@ async def stop_twitch_watch(ctx):
 
 @bot.command(name="ping")
 async def ping(ctx):
-    await ctx.send("Pong!")
+    await ctx.send(f"Pong! Latence : {round(bot.latency * 1000)}ms")
 
 
 # --- ÉVÉNEMENTS DISCORD ---
@@ -321,14 +266,20 @@ async def on_ready():
     print(f"Bot Discord connecté en tant que {bot.user} !")
 
 
-# --- LANCEMENT ---
+# --- LANCEMENT CONCURRENT DES BOTS ---
 async def main():
+    # Crée une instance du bot Twitch et la lie au bot Discord pour communication
     twitch_bot_instance = WatcherBot(bot)
     bot.twitch_bot = twitch_bot_instance
-    await asyncio.gather(bot.start(DISCORD_TOKEN), twitch_bot_instance.start())
+    
+    # Lance les deux bots en parallèle
+    await asyncio.gather(
+        bot.start(DISCORD_TOKEN), 
+        twitch_bot_instance.start()
+    )
 
 if __name__ == "__main__":
     try:
         asyncio.run(main())
     except KeyboardInterrupt:
-        print("Arrêt du bot demandé.")
+        print("\nArrêt du bot demandé.")
