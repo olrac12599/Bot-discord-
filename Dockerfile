@@ -11,8 +11,9 @@ WORKDIR /app
 # --no-install-recommends: Réduit la taille de l'image en n'installant pas les paquets "recommandés".
 # xvfb: Serveur d'affichage virtuel.
 # ffmpeg: Pour la capture et le traitement vidéo.
-# Toutes les autres libs sont des dépendances courantes pour Chromium headless.
+# Tuttes les autres libs sont des dépendances courantes pour Chromium headless.
 # ca-certificates: Important pour les requêtes HTTPS.
+# libxtst6: Souvent nécessaire pour les interactions IHM dans Xvfb (pour le mouvement de souris, etc.)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     wget \
@@ -35,6 +36,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libpng-dev \
     libtiff-dev \
     libwebp-dev \
+    libxtst6 \
+    # Installe stockfish - il est recommandé de l'installer au niveau système
+    stockfish \
     # Nettoie le cache APT pour réduire la taille de l'image Docker finale
     && rm -rf /var/lib/apt/lists/*
 
