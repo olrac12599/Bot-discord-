@@ -5,9 +5,10 @@ from twitchio.ext import commands as twitch_commands
 import os
 import asyncio
 from enum import Enum, auto
-from playwright.async_api import async_playwright
-import io # Ajouté pour gérer les fichiers en mémoire
-from PIL import Image # Ajouté pour la compression d'image
+# Importation de l'erreur Timeout de Playwright
+from playwright.async_api import async_playwright, TimeoutError as PlaywrightTimeoutError
+import io
+from PIL import Image
 
 # --- CONFIGURATION ---
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
@@ -30,7 +31,7 @@ intents.message_content = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 
 
-# --- NOUVELLE EXCEPTION PERSONNALISÉE ---
+# --- EXCEPTION PERSONNALISÉE ---
 class ScrapingError(Exception):
     """Exception personnalisée pour les erreurs de scraping, contenant la capture d'écran."""
     def __init__(self, message, screenshot_bytes=None):
@@ -38,10 +39,10 @@ class ScrapingError(Exception):
         self.screenshot_bytes = screenshot_bytes
 
 
-# --- FONCTION DE SCRAPING MODIFIÉE ---
+# --- FONCTION DE SCRAPING MODIFIÉE AVEC GESTION DES COOKIES ---
 async def get_pgn_from_chess_com(url: str, username: str, password: str) -> str:
     """
-    Attend que les éléments soient visibles et retourne une ScrapingError avec l'image en cas d'échec.
+    Accepte les cookies, se connecte, et récupère le PGN.
     """
     async with async_playwright() as p:
         browser = await p.firefox.launch(headless=True)
@@ -49,6 +50,22 @@ async def get_pgn_from_chess_com(url: str, username: str, password: str) -> str:
         try:
             print("Navigation vers la page de connexion...")
             await page.goto("https://www.chess.com/login_and_go", timeout=90000)
+            
+            # --- NOUVELLE ÉTAPE : GESTION DE LA BANNIÈRE DE COOKIES ---
+            try:
+                print("Vérification de la présence de la bannière de cookies...")
+                # On utilise un sélecteur robuste qui cible le bouton par son rôle et son nom
+                # On lui laisse un temps raisonnable pour apparaître (ex: 10 secondes)
+                accept_button = page.get_by_role("button", name="I Accept")
+                await accept_button.wait_for(state="visible", timeout=10000)
+                print("Bannière trouvée. Clic sur 'I Accept'...")
+                await accept_button.click()
+                print("Cookies acceptés.")
+                # On attend un court instant que le dialogue disparaisse
+                await page.wait_for_timeout(1000) 
+            except PlaywrightTimeoutError:
+                # Si le bouton n'apparaît pas dans le temps imparti, on considère qu'il n'y en a pas.
+                print("Aucune bannière de cookies détectée, on continue.")
             
             print("Attente de la visibilité du champ 'username'...")
             username_selector = "#username"
@@ -87,10 +104,8 @@ async def get_pgn_from_chess_com(url: str, username: str, password: str) -> str:
 
         except Exception as e:
             print(f"ERREUR: Une erreur de scraping est survenue. Prise de la capture d'écran...")
-            # On prend la capture en mémoire (bytes) au lieu de la sauvegarder
             screenshot_bytes = await page.screenshot(full_page=True)
             await browser.close()
-            # On lève notre nouvelle exception en lui passant le message et l'image
             raise ScrapingError(f"Détails: {e}", screenshot_bytes=screenshot_bytes)
 
 
@@ -139,7 +154,7 @@ class WatcherBot(twitch_commands.Bot):
             await self.target_discord_channel.send(msg[:2000])
 
 
-# --- COMMANDES DISCORD MODIFIÉES ---
+# --- COMMANDES DISCORD (INCHANGÉES) ---
 @bot.command(name="chess")
 async def get_chess_pgn(ctx, url: str):
     if not ("chess.com/game/live/" in url or "chess.com/play/game/" in url):
@@ -158,7 +173,6 @@ async def get_chess_pgn(ctx, url: str):
             
         await msg.edit(content=f"✅ PGN récupéré !\n```\n{pgn_short}\n```")
 
-    # On intercepte notre erreur personnalisée
     except ScrapingError as e:
         await msg.edit(content=f"❌ Erreur lors de la récupération du PGN. Une capture d'écran de l'erreur est en cours de traitement...")
         
@@ -166,28 +180,22 @@ async def get_chess_pgn(ctx, url: str):
             image_bytes = e.screenshot_bytes
             filename = "debug_screenshot.png"
             
-            # Vérification de la taille et compression si nécessaire
             if len(image_bytes) > DISCORD_FILE_LIMIT_BYTES:
                 await ctx.send(f"⚠️ La capture d'écran est trop lourde ({len(image_bytes) / 1_000_000:.2f} Mo). Compression en cours...")
                 
-                # On utilise Pillow pour compresser l'image
                 img = Image.open(io.BytesIO(image_bytes))
                 output_buffer = io.BytesIO()
-                # Conversion en JPEG qui est plus efficace pour la compression de photos/captures
                 img.convert("RGB").save(output_buffer, format="JPEG", quality=85, optimize=True)
                 image_bytes = output_buffer.getvalue()
                 filename = "debug_screenshot_compressed.jpg"
 
-            # On envoie le message d'erreur final avec le fichier image
             await ctx.send(
                 content=f"❌ **Erreur de scraping :** {e}",
                 file=discord.File(io.BytesIO(image_bytes), filename=filename)
             )
         else:
-            # Fallback si, pour une raison inconnue, l'image n'a pas été capturée
             await ctx.send(f"❌ **Erreur de scraping :** {e} (aucune capture d'écran disponible).")
             
-    # Intercepter d'autres erreurs potentielles
     except Exception as e:
         await msg.edit(content=f"❌ Une erreur imprévue est survenue : {e}")
 
