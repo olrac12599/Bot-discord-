@@ -1,5 +1,2 @@
-[phases.build]
-cmds = ["playwright install chromium --with-deps"]
-
 [start]
 cmd = "python main.py"
