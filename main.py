@@ -57,6 +57,32 @@ async def get_pgn_from_chess_com(url: str, username: str, password: str):
 
         try:
             await page.goto("/login_and_go", timeout=90000)
+
+            # Wait for 5 seconds (as requested)
+            await asyncio.sleep(5)
+
+            # Accept cookies if the dialog is visible
+            # We look for a button with the text "I Accept" or a similar role/text if "I Accept" is not precise enough.
+            # We'll use a more robust locator strategy that checks for visibility.
+            try:
+                # This locator tries to find a button within a dialog that has "I Accept" text.
+                # Adjust the selector if "I Accept" doesn't uniquely identify the button.
+                # A common pattern for cookie banners is a dialog with buttons.
+                accept_cookies_button = page.locator('button:has-text("I Accept"), button[aria-label="Accept cookies"]')
+                
+                # Check if the button is visible before attempting to click
+                if await accept_cookies_button.is_visible(timeout=5000): # Give it up to 5 seconds to appear
+                    print("Cookie consent dialog detected. Clicking 'I Accept'.")
+                    await accept_cookies_button.click()
+                    await asyncio.sleep(2) # Give some time for the cookie dialog to close
+                else:
+                    print("Cookie consent dialog not visible or 'I Accept' button not found.")
+            except PlaywrightTimeoutError:
+                print("No cookie consent dialog found within the timeout.")
+            except Exception as e:
+                print(f"Error handling cookie consent: {e}")
+
+
             await page.get_by_placeholder("Username, Phone, or Email").type(username)
             await page.get_by_placeholder("Password").type(password)
             await page.get_by_role("button", name="Log In").click()
