@@ -33,22 +33,26 @@ tracked_games = {}
 # --- SECTION 5 : FONCTIONS UTILITAIRES ---
 
 def get_chess_com_game_pgn(game_url: str) -> str:
-    """Récupère le PGN d'une partie Chess.com en direct."""
+    """
+    Récupère le PGN d'une partie en direct Chess.com.
+    Renvoie une erreur si la partie est terminée (404) ou si l'URL est invalide.
+    """
     try:
-        if "/game/live/" in game_url:
-            game_id = game_url.strip("/").split("/")[-1]
-            api_url = f"https://www.chess.com/game/live/pgn/{game_id}"
-        elif "/game/daily/" in game_url:
-            game_id = game_url.strip("/").split("/")[-1]
-            api_url = f"https://www.chess.com/game/daily/pgn/{game_id}"
-        else:
-            raise ValueError("URL de partie Chess.com invalide ou non prise en charge.")
-        
+        if "/game/live/" not in game_url:
+            raise ValueError("❌ Cette commande ne fonctionne que pour les parties *en direct* de Chess.com.")
+
+        game_id = game_url.strip("/").split("/")[-1]
+        api_url = f"https://www.chess.com/game/live/pgn/{game_id}"
         response = requests.get(api_url, timeout=5)
+
+        if response.status_code == 404:
+            raise RuntimeError("❌ La partie est déjà terminée — impossible de récupérer le PGN en direct.")
+
         response.raise_for_status()
         return response.text
+
     except Exception as e:
-        raise RuntimeError(f"Erreur récupération PGN : {e}")
+        raise RuntimeError(f"⚠️ Erreur récupération PGN : {e}")
 
 def get_lichess_evaluation(fen: str):
     try:
@@ -165,9 +169,17 @@ async def start_chess_analysis(ctx, url: str):
     if "chess.com/game/live/" not in url:
         await ctx.send("❌ URL de partie en direct Chess.com invalide.")
         return
+
     if ctx.channel.id in tracked_games:
         await ctx.send("⏳ Analyse déjà en cours. Utilise `!stopchess` pour l'arrêter.")
         return
+
+    try:
+        _ = get_chess_com_game_pgn(url)  # Teste la validité du PGN au lancement
+    except Exception as e:
+        await ctx.send(str(e))
+        return
+
     await ctx.send("🧠 Analyse de la partie en cours... (toutes les 15 secondes)")
     task = game_analysis_loop.start(ctx, url)
     tracked_games[ctx.channel.id] = {'url': url, 'last_ply': 0, 'task': task}
@@ -253,8 +265,9 @@ async def game_analysis_loop(ctx, game_url):
 
     except Exception as e:
         await ctx.send(f"⚠️ Erreur analyse : {e}")
-        tracked_games[cid]['task'].cancel()
-        del tracked_games[cid]
+        if cid in tracked_games:
+            tracked_games[cid]['task'].cancel()
+            del tracked_games[cid]
 
 # --- SECTION 9 : LANCEMENT ---
 
