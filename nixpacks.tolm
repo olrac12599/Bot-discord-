@@ -1,1 +1,10 @@
-.
+# Fichier de configuration pour Nixpacks
+
+[phases.build]
+# Commande à exécuter après l'installation des dépendances Python.
+# On installe le navigateur Chromium et ses dépendances système.
+cmds = ["playwright install chromium --with-deps"]
+
+[start]
+# Commande pour démarrer l'application.
+cmd = "python main.py"
