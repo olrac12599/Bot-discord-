@@ -20,57 +20,65 @@ COMPRESSED_PATH = "compressed.mp4"
 
 # Configurer les intents Discord
 intents = discord.Intents.default()
-intents.message_content = True  # ✅ Permet de lire le contenu des messages
+intents.message_content = True
 
-# Initialiser le bot Discord
+# Initialiser le bot
 bot = commands.Bot(command_prefix='!', intents=intents)
 
-# 📹 Fonction d'enregistrement d'une partie Chess.com via navigateur
+# 📹 Fonction d'enregistrement
 def record_game(url, duration=10):
     try:
-        # Auto-installer chromedriver
+        print("[DEBUG] Début de record_game")
         chromedriver_autoinstaller.install()
 
         chrome_options = Options()
-        chrome_options.add_argument("--headless")
+        # chrome_options.add_argument("--headless")  # Désactive pour tester
         chrome_options.add_argument("--no-sandbox")
         chrome_options.add_argument("--disable-dev-shm-usage")
         chrome_options.add_argument("--window-size=1280,720")
 
         driver = webdriver.Chrome(options=chrome_options)
+        print("[DEBUG] Navigateur lancé")
         driver.get(url)
-        time.sleep(3)  # Laisse le temps à la page de charger
+        time.sleep(3)  # attendre que la page charge
 
         with mss.mss() as sct:
-            monitor = sct.monitors[1]
+            monitor = sct.monitors[0]  # capture tout l'écran
+            print(f"[DEBUG] Capture depuis moniteur : {monitor}")
             fourcc = cv2.VideoWriter_fourcc(*"mp4v")
             out = cv2.VideoWriter(VIDEO_PATH, fourcc, 10.0, (monitor["width"], monitor["height"]))
+
             start_time = time.time()
+            frame_count = 0
 
             while time.time() - start_time < duration:
                 img = np.array(sct.grab(monitor))
                 frame = cv2.cvtColor(img, cv2.COLOR_BGRA2BGR)
                 out.write(frame)
+                frame_count += 1
 
             out.release()
+            print(f"[DEBUG] Enregistrement terminé. Frames capturées: {frame_count}")
         driver.quit()
         return True
     except Exception as e:
         print(f"[Erreur record_game] {e}")
         return False
 
-# 🗜️ Compression de la vidéo
+# 🗜️ Compression vidéo
 def compress_video():
     try:
+        print("[DEBUG] Début compression")
         clip = VideoFileClip(VIDEO_PATH)
         clip_resized = clip.resize(height=360)
         clip_resized.write_videofile(COMPRESSED_PATH, bitrate="500k", codec="libx264", audio=False)
+        print("[DEBUG] Compression terminée")
         return COMPRESSED_PATH
     except Exception as e:
         print(f"[Erreur compress_video] {e}")
         return None
 
-# 📥 Commande !chess <game_id>
+# 📥 Commande !chess
 @bot.command()
 async def chess(ctx, game_id: str):
     url = f"https://www.chess.com/game/live/{game_id}"
@@ -83,9 +91,9 @@ async def chess(ctx, game_id: str):
     if success:
         await ctx.send("✅ Partie enregistrée ! Utilise `!cam` pour récupérer la vidéo.")
     else:
-        await ctx.send("❌ Erreur lors de l'enregistrement.")
+        await ctx.send("❌ Erreur lors de l'enregistrement. Regarde la console pour plus de détails.")
 
-# 🎬 Commande !cam pour envoyer la vidéo compressée
+# 🎬 Commande !cam
 @bot.command()
 async def cam(ctx):
     if not os.path.exists(VIDEO_PATH):
@@ -106,6 +114,7 @@ async def cam(ctx):
     else:
         await ctx.send("❌ Erreur lors de la compression.")
 
-# 🚀 Lancement du bot
+# 🚀 Lancer le bot
 if __name__ == "__main__":
+    print("[INFO] Bot en cours de démarrage...")
     bot.run(DISCORD_TOKEN)
