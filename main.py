@@ -19,7 +19,7 @@ TTV_BOT_NICKNAME = os.getenv("TTV_BOT_NICKNAME")
 CHESS_USERNAME = os.getenv("CHESS_USERNAME")
 CHESS_PASSWORD = os.getenv("CHESS_PASSWORD")
 DISCORD_FILE_LIMIT_BYTES = 8 * 1024 * 1024
-STOCKFISH_PATH = "/usr/games/stockfish"  # À adapter si besoin (ex: "stockfish" si dans le PATH)
+STOCKFISH_PATH = "/usr/games/stockfish"
 
 if not all([DISCORD_TOKEN, TTV_BOT_NICKNAME, TTV_BOT_TOKEN]):
     raise ValueError("Variables d'environnement Discord/Twitch manquantes. Vérifiez DISCORD_TOKEN, TTV_BOT_NICKNAME, TTV_BOT_TOKEN.")
@@ -34,7 +34,6 @@ last_video_paths = {}
 
 # --- ERREUR CUSTOM ---
 class ScrapingError(Exception):
-    """Exception personnalisée pour les erreurs de scraping avec capture d'écran et vidéo."""
     def __init__(self, message, screenshot_bytes=None, video_path=None):
         super().__init__(message)
         self.screenshot_bytes = screenshot_bytes
@@ -48,40 +47,75 @@ async def handle_potential_blockers(page, context_description=""):
     """
     print(f"[{context_description}] AI-like blocker handler: Checking for common pop-ups...")
 
+    # --- TENTER DE GÉRER LES POP-UPS DANS DES IFRAMES (FRÉQUENT POUR LES COOKIES) ---
+    iframe_selectors = [
+        'iframe[title*="Privacy"], iframe[name*="privacy"]', # Common iframe titles/names for privacy
+        'iframe[src*="privacy-policy"], iframe[src*="cookie-consent"]', # Common iframe src
+        'iframe' # General iframe, could be too broad
+    ]
+
+    for iframe_selector in iframe_selectors:
+        try:
+            iframe_element = await page.wait_for_selector(iframe_selector, state='attached', timeout=2000)
+            if iframe_element:
+                iframe = await iframe_element.content_frame()
+                if iframe:
+                    print(f"[{context_description}] Found potential iframe: {iframe_selector}. Checking for cookie button inside.")
+                    try:
+                        # Sélecteur ciblant le bouton "I Accept" dans l'iframe
+                        accept_cookies_button_in_iframe = iframe.locator('button:has-text("I Accept"), button:has-text("J\'accepte"), button[aria-label="Accept cookies"]')
+                        
+                        if await accept_cookies_button_in_iframe.is_visible(timeout=3000):
+                            print(f"[{context_description}] Found 'I Accept' button inside iframe. Clicking.")
+                            await accept_cookies_button_in_iframe.click()
+                            await asyncio.sleep(2)
+                            return True # Blocage géré
+                    except PlaywrightTimeoutError:
+                        pass # Bouton non trouvé dans cet iframe
+                    except Exception as e_iframe_btn:
+                        print(f"[{context_description}] Error clicking button in iframe: {e_iframe_btn}")
+        except PlaywrightTimeoutError:
+            pass # Pas d'iframe trouvé avec ce sélecteur
+        except Exception as e_iframe:
+            print(f"[{context_description}] Error locating/accessing iframe {iframe_selector}: {e_iframe}")
+
+
+    # --- TENTER DE GÉRER LES POP-UPS DIRECTEMENT SUR LA PAGE PRINCIPALE ---
     # Tenter de gérer les pop-ups de consentement aux cookies
     try:
-        accept_cookies_button = page.locator('button:has-text("I Accept"), button:has-text("J\'accepte"), button[aria-label="Accept cookies"], a[href*="cookie-policy"] >> xpath=.. >> button:has-text("Accept")')
-        if await accept_cookies_button.is_visible(timeout=3000): # Timeout plus court pour ne pas bloquer
-            print(f"[{context_description}] Found cookie consent pop-up. Clicking 'Accept'.")
-            await accept_cookies_button.click()
-            await asyncio.sleep(1) # Petit délai pour que le pop-up disparaisse
-            return True # Blocage géré
+        accept_cookies_button_main_page = page.locator('button:has-text("I Accept"), button:has-text("J\'accepte"), button[aria-label="Accept cookies"], a[href*="cookie-policy"] >> xpath=.. >> button:has-text("Accept")')
+        if await accept_cookies_button_main_page.is_visible(timeout=3000):
+            print(f"[{context_description}] Found cookie consent pop-up on main page. Clicking 'Accept'.")
+            # Utiliser force=True si des overlays temporaires empêchent le clic normal
+            await accept_cookies_button_main_page.click(force=True) 
+            await asyncio.sleep(1)
+            return True
     except PlaywrightTimeoutError:
-        pass # Pas de pop-up de cookies trouvé dans ce délai
+        pass
     except Exception as e:
-        print(f"[{context_description}] Error handling cookie pop-up: {e}")
+        print(f"[{context_description}] Error handling main page cookie pop-up: {e}")
 
     # Tenter de gérer les pop-ups de newsletter ou autres modales génériques
     try:
-        # Cherche un bouton de fermeture (X) ou un bouton "No Thanks", "Later"
-        close_button = page.locator('button[aria-label="close"], button:has-text("No Thanks"), button:has-text("Not now"), .modal-close-button, .close-button')
+        close_button = page.locator('button[aria-label="close"], button:has-text("No Thanks"), button:has-text("Not now"), .modal-close-button, .close-button, div[role="dialog"] >> button:has-text("No Thanks")')
         if await close_button.is_visible(timeout=2000):
             print(f"[{context_description}] Found generic pop-up. Clicking close/dismiss button.")
-            await close_button.click()
+            await close_button.click(force=True)
             await asyncio.sleep(1)
-            return True # Blocage géré
+            return True
     except PlaywrightTimeoutError:
         pass
     except Exception as e:
         print(f"[{context_description}] Error handling generic pop-up: {e}")
 
     # Autres vérifications spécifiques à Chess.com ou autres sites
-    # Exemple: Si Chess.com affiche un pop-up "Bienvenue", "Nouvelle fonctionnalité", etc.
     try:
-        welcome_modal_close = page.locator('.modal-dialog:has-text("Welcome to Chess.com") button[aria-label="close"], .modal-dialog:has-text("New Feature") button[aria-label="close"]')
+        # Assurez-vous que ces sélecteurs sont spécifiques et n'affecteront pas d'autres éléments.
+        # Par exemple, un modal qui dit "Bienvenue à Chess.com" ou "Nouvelle fonctionnalité"
+        welcome_modal_close = page.locator('.modal-dialog:has-text("Welcome to Chess.com") button[aria-label="close"], .modal-dialog:has-text("New Feature") button[aria-label="close"], button.btn-close-x')
         if await welcome_modal_close.is_visible(timeout=1000):
             print(f"[{context_description}] Found Chess.com specific welcome/feature pop-up. Closing it.")
-            await welcome_modal_close.click()
+            await welcome_modal_close.click(force=True)
             await asyncio.sleep(1)
             return True
     except PlaywrightTimeoutError:
@@ -90,9 +124,9 @@ async def handle_potential_blockers(page, context_description=""):
         print(f"[{context_description}] Error handling Chess.com specific pop-up: {e}")
 
     print(f"[{context_description}] No known blockers detected.")
-    return False # Aucun blocage connu n'a été géré
+    return False
 
-# --- PGN SCRAPER ---
+# --- PGN SCRAPER (inchangé, sauf les appels à handle_potential_blockers) ---
 async def get_pgn_from_chess_com(url: str, username: str, password: str):
     videos_dir = Path("debug_videos")
     videos_dir.mkdir(exist_ok=True)
@@ -109,65 +143,51 @@ async def get_pgn_from_chess_com(url: str, username: str, password: str):
         page = await context.new_page()
 
         try:
-            # Naviguer à la page de connexion
             print("Navigating to login page...")
             await page.goto("/login_and_go", timeout=90000)
 
             # --- DÉBUT DE L'INTERVENTION DE L'IA ---
-            # Attendre un court instant après le chargement initial au cas où un pop-up apparaît immédiatement
             await asyncio.sleep(2) # Attente initiale pour les popups immédiats
-
-            # Tenter de gérer les bloqueurs avant la connexion
             await handle_potential_blockers(page, "Before Login Attempt")
 
-            # Attendre les 5 secondes demandées avant la connexion
             print("Waiting 5 seconds before login action...")
             await asyncio.sleep(5)
 
             login_successful = False
-            for attempt in range(3): # Tenter la connexion plusieurs fois en cas de blocage
+            for attempt in range(3):
                 print(f"Login attempt {attempt + 1}...")
                 try:
-                    # Tenter d'entrer les identifiants et de cliquer sur le bouton de connexion
-                    # Utilisez force=True pour éviter les problèmes de "element not interactable" si un overlay temporaire est là
                     await page.get_by_placeholder("Username, Phone, or Email").fill(username)
                     await page.get_by_placeholder("Password").fill(password)
                     await page.get_by_role("button", name="Log In").click()
                     
-                    # Attendre que l'URL de la page d'accueil soit chargée après la connexion
                     await page.wait_for_url("**/home", timeout=15000)
                     print("Login successful.")
                     login_successful = True
-                    break # Sortir de la boucle si la connexion est réussie
+                    break
                 except PlaywrightTimeoutError as e:
                     print(f"Login attempt {attempt + 1} failed (timeout): {e}. Checking for blockers...")
-                    # Si la connexion échoue, demander à l'IA de vérifier les bloqueurs
                     blocker_handled = await handle_potential_blockers(page, f"After Login Fail (Attempt {attempt + 1})")
                     if not blocker_handled:
                         print(f"No known blocker handled after failed login attempt {attempt + 1}. Retrying...")
-                    # Attendre un peu avant de retenter
                     await asyncio.sleep(3)
                 except Exception as e:
                     print(f"An unexpected error occurred during login attempt {attempt + 1}: {e}. Retrying...")
-                    await asyncio.sleep(3) # Attendre avant de retenter
+                    await asyncio.sleep(3)
 
             if not login_successful:
                 raise ScrapingError("Failed to log in to Chess.com after multiple attempts.")
             # --- FIN DE L'INTERVENTION DE L'IA ---
 
-            # Naviguer vers l'URL du jeu spécifique
             print(f"Navigating to game URL: {url}")
             await page.goto(url, timeout=90000)
 
-            # Gérer d'éventuels bloqueurs après la navigation vers le jeu (ex: pop-ups spécifiques au jeu)
             await handle_potential_blockers(page, "After Game Page Load")
 
-            # Cliquer sur le bouton de partage et l'onglet PGN
             print("Clicking share button and PGN tab...")
             await page.locator("button.share-button-component").click()
             await page.locator('div.share-menu-tab-component-header:has-text("PGN")').click()
 
-            # Récupérer le texte PGN de la zone de texte
             print("Extracting PGN text...")
             pgn_text = await page.input_value('textarea.share-menu-tab-pgn-textarea')
             print("PGN extracted.")
