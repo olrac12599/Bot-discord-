@@ -37,10 +37,10 @@ class ScrapingError(Exception):
         self.screenshot_bytes = screenshot_bytes
 
 
-# --- FONCTION DE SCRAPING ENCORE AMÉLIORÉE ---
+# --- FONCTION DE SCRAPING MISE À JOUR ---
 async def get_pgn_from_chess_com(url: str, username: str, password: str) -> str:
     """
-    Utilise une méthode de sélection robuste ("get_by_label") pour la connexion.
+    Utilise get_by_placeholder pour une sélection non-ambiguë des champs de connexion.
     """
     async with async_playwright() as p:
         browser = await p.firefox.launch(headless=True)
@@ -60,19 +60,17 @@ async def get_pgn_from_chess_com(url: str, username: str, password: str) -> str:
             except PlaywrightTimeoutError:
                 print("Aucune bannière de cookies détectée, on continue.")
             
-            # --- MODIFICATION CLÉ : ON UTILISE get_by_label ---
-            # Cette méthode est beaucoup plus fiable car elle imite un utilisateur
-            # qui cherche un champ à côté d'un texte spécifique.
-            # Elle attend automatiquement que l'élément soit visible et cliquable.
+            # --- MODIFICATION CLÉ : ON UTILISE get_by_placeholder ---
+            # Cette méthode cible le champ via le texte d'exemple visible à l'intérieur,
+            # ce qui résout l'ambiguïté quand plusieurs labels sont identiques.
             
-            print("Remplissage du champ 'username' via son label...")
-            await page.get_by_label("Username, Phone, or Email").fill(username)
+            print("Remplissage du champ 'username' via son placeholder...")
+            await page.get_by_placeholder("Username, Phone, or Email").fill(username)
             
-            print("Remplissage du champ 'password' via son label...")
-            await page.get_by_label("Password").fill(password)
+            print("Remplissage du champ 'password' via son placeholder...")
+            await page.get_by_placeholder("Password").fill(password)
             
             print("Clic sur le bouton de connexion...")
-            # On cible le bouton par son rôle et son nom visible pour plus de fiabilité
             await page.get_by_role("button", name="Log In").click()
             
             print("Attente de la redirection après connexion...")
@@ -223,4 +221,3 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
-
