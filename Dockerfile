@@ -1,11 +1,14 @@
 # Dockerfile finalisé pour un bot Python avec Playwright, Xvfb, FFmpeg et Flask (streaming)
 
 # Étape 1 : Utiliser une image Docker officielle de Playwright.
-# Ces images incluent déjà Python, Node.js, Playwright et TOUS les navigateurs (Chromium, Firefox, WebKit)
-# avec leurs dépendances système nécessaires. Cela simplifie énormément l'installation.
-# Nous utilisons une version spécifique (v1.44.0) avec Python 3.10 sur Debian Bookworm (Debian 12).
-# Vérifiez https://hub.docker.com/r/mcr.microsoft.com/playwright/python/tags pour les versions plus récentes si nécessaire.
-FROM mcr.microsoft.com/playwright/python:v1.44.0-python3.10-bookworm
+# Utilisation d'une version plus récente et vérifiée sur Docker Hub (v1.45.0 avec Python 3.11 sur Debian Bookworm).
+# Si cette version n'est pas trouvée non plus, vous devrez consulter
+# https://hub.docker.com/r/mcr.microsoft.com/playwright/python/tags
+# pour trouver le tag exact le plus récent.
+FROM mcr.microsoft.com/playwright/python:v1.45.0-python3.11-bookworm
+
+# Le reste du Dockerfile reste inchangé
+# ... (le reste de votre Dockerfile) ...
 
 # Étape 2 : Définir le répertoire de travail dans le conteneur.
 # Tous les fichiers de votre projet seront copiés ici.
