@@ -1,6 +1,5 @@
 discord.py
 twitchio
-python-dotenv
 playwright
-pillow
+playwright-stealth
 Pillow
