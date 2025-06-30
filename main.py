@@ -38,8 +38,10 @@ STOCKFISH_PATH = "/usr/games/stockfish"
 # Configuration pour le stream vidéo
 # Railway fournira la variable PORT. Il est crucial que Flask écoute sur ce port.
 VIDEO_STREAM_PORT = int(os.getenv("PORT", 5000))
-VIDEO_WIDTH, VIDEO_HEIGHT = 1280, 720 # Résolution du navigateur et du stream
-FPS = 15 # Images par seconde pour le stream (réduire pour économiser des ressources)
+# RAM et CPU limits on Railway often cause issues with high resolutions/FPS.
+# It's highly recommended to lower these values for stability on shared hosting.
+VIDEO_WIDTH, VIDEO_HEIGHT = 800, 600 # Reduced resolution for better performance
+FPS = 10 # Reduced FPS for better performance and lower resource usage
 DISPLAY_NUM = ":99" # Numéro d'affichage virtuel pour Xvfb (nécessaire sur les serveurs headless)
 
 # Vérification des variables d'environnement critiques au démarrage
@@ -107,7 +109,6 @@ async def handle_potential_blockers(page, context_description=""):
     print(f"[{context_description}] AI-like blocker handler: Checking for common pop-ups...")
 
     # --- Stratégie 1 : Tenter de gérer le bouton "I Accept" directement par son texte/rôle ---
-    # Ces localisateurs sont robustes car ils cherchent le texte visible et le rôle sémantique.
     accept_locators = [
         page.get_by_text("I Accept", exact=True),
         page.get_by_role("button", name="I Accept"),
@@ -120,58 +121,48 @@ async def handle_potential_blockers(page, context_description=""):
     for i, locator in enumerate(accept_locators):
         print(f"[{context_description}] Trying 'I Accept' locator strategy {i+1}...")
         try:
-            # Attendre que l'élément soit visible avec un timeout généreux (10 secondes)
-            await locator.wait_for(state='visible', timeout=10000)
+            await locator.wait_for(state='visible', timeout=5000) 
             print(f"[{context_description}] 'I Accept' button found visible with strategy {i+1}.")
-            
-            # Cliquer sur l'élément. force=True ignore les checks de cliquabilité de Playwright
-            # (utile si un overlay invisible ou une animation bloque le clic normal).
-            await locator.click(force=True, timeout=5000) 
+            await locator.click(force=True, timeout=3000) 
             print(f"[{context_description}] Successfully clicked 'I Accept' with strategy {i+1}.")
-            await asyncio.sleep(2) # Laisser le temps au pop-up de se fermer
-            return True # Blocage géré avec succès
+            await asyncio.sleep(2)
+            return True
         except PlaywrightTimeoutError:
             print(f"[{context_description}] 'I Accept' button not visible with strategy {i+1} within timeout.")
         except Exception as e_click:
             print(f"[{context_description}] Error clicking 'I Accept' button with strategy {i+1}: {e_click}")
     
     # --- Stratégie 2 : Tenter de gérer les pop-ups de cookies dans des IFRAMES ---
-    # Les iframes sont une cause fréquente de problèmes car le contenu est "isolé".
     iframe_selectors = [
-        'iframe[title*="Privacy"], iframe[name*="privacy"]', # Titres/noms courants d'iframes de confidentialité
-        'iframe[src*="privacy-policy"], iframe[src*="cookie-consent"]', # URL src courantes
-        'iframe' # Sélecteur générique d'iframe (en dernier recours, peut être trop large)
+        'iframe[title*="Privacy"], iframe[name*="privacy"]',
+        'iframe[src*="privacy-policy"], iframe[src*="cookie-consent"]',
+        'iframe'
     ]
 
     for iframe_selector in iframe_selectors:
         try:
-            # Attendre que l'iframe soit attachée au DOM
             iframe_element = await page.wait_for_selector(iframe_selector, state='attached', timeout=2000)
             if iframe_element:
-                # Obtenir le contexte de l'iframe
                 iframe = await iframe_element.content_frame()
                 if iframe:
                     print(f"[{context_description}] Found potential iframe: {iframe_selector}. Checking for cookie button inside.")
                     try:
-                        # Re-tenter les mêmes sélecteurs basés sur le texte à l'intérieur de l'iframe
                         accept_cookies_button_in_iframe = iframe.locator('button:has-text("I Accept"), button:has-text("J\'accepte"), button[aria-label="Accept cookies"]')
-                        
                         await accept_cookies_button_in_iframe.wait_for(state='visible', timeout=5000)
                         print(f"[{context_description}] Found 'I Accept' button inside iframe. Clicking.")
                         await accept_cookies_button_in_iframe.click(force=True)
                         await asyncio.sleep(2)
                         return True
                     except PlaywrightTimeoutError:
-                        pass # Bouton non trouvé dans cet iframe
+                        pass
                     except Exception as e_iframe_btn:
                         print(f"[{context_description}] Error clicking button in iframe: {e_iframe_btn}")
         except PlaywrightTimeoutError:
-            pass # Pas d'iframe trouvé avec ce sélecteur
+            pass
         except Exception as e_iframe:
             print(f"[{context_description}] Error locating/accessing iframe {iframe_selector}: {e_iframe}")
 
     # --- Stratégie 3 : Gérer les pop-ups génériques de fermeture (ex: newsletters) ---
-    # Si "I Accept" est introuvable, essayer de fermer d'autres types de pop-ups.
     try:
         close_button = page.locator('button[aria-label="close"], button:has-text("No Thanks"), button:has-text("Not now"), .modal-close-button, .close-button, div[role="dialog"] >> button:has-text("No Thanks"), .x-button-icon')
         if await close_button.is_visible(timeout=2000):
@@ -186,7 +177,6 @@ async def handle_potential_blockers(page, context_description=""):
 
     # --- Stratégie 4 : Vérifications spécifiques à Chess.com (si d'autres stratégies ont échoué) ---
     try:
-        # Exemples de sélecteurs pour des modales spécifiques à Chess.com
         welcome_modal_close = page.locator('.modal-dialog:has-text("Welcome to Chess.com") button[aria-label="close"], .modal-dialog:has-text("New Feature") button[aria-label="close"], button.btn-close-x')
         if await welcome_modal_close.is_visible(timeout=1000):
             print(f"[{context_description}] Found Chess.com specific welcome/feature pop-up. Closing it.")
@@ -198,10 +188,35 @@ async def handle_potential_blockers(page, context_description=""):
     except Exception as e:
         print(f"[{context_description}] Error handling Chess.com specific pop-up: {e}")
 
-    print(f"[{context_description}] No known blockers detected.")
+    # --- NOUVELLE STRATÉGIE (et priorité): Gérer le message "Aw, Snap!" ---
+    try:
+        reload_button = page.get_by_role("button", name="Reload", exact=True)
+        learn_more_link = page.get_by_text("Learn more", exact=True)
+
+        if await reload_button.is_visible(timeout=2000):
+            print(f"[{context_description}] Detected 'Aw, Snap!' with 'Reload' button. Attempting to click Reload.")
+            await reload_button.click()
+            await asyncio.sleep(5) # Laisser le temps à la page de recharger (ou de crasher à nouveau)
+            # Après un rechargement, il est bon de tenter de gérer à nouveau d'autres blockers
+            # Note: Si le navigateur a vraiment planté, un reload ne va pas toujours aider,
+            # mais nous le tentons comme demandé.
+            await handle_potential_blockers(page, f"{context_description} after 'Reload' attempt")
+            return True # Considérons que nous avons tenté de gérer le problème
+        elif await learn_more_link.is_visible(timeout=1000):
+            print(f"[{context_description}] Detected 'Aw, Snap!' with 'Learn more' link. Attempting to click Learn more.")
+            await learn_more_link.click()
+            await asyncio.sleep(3) # Laisser le temps d'ouvrir la page d'info (même si elle est souvent vide après un crash)
+            return True # Considérons que nous avons tenté de gérer le problème
+    except PlaywrightTimeoutError:
+        pass # Ni Reload ni Learn more visibles
+    except Exception as e:
+        print(f"[{context_description}] Error handling 'Aw, Snap!' elements: {e}")
+
+
+    print(f"[{context_description}] No known blockers or 'Aw, Snap!' elements detected.")
     return False
 
-# --- PGN SCRAPER AVEC STREAMING ---
+# --- PGN SCRAPER AVEC STREAMING (le reste du code est inchangé) ---
 async def get_pgn_from_chess_com(url: str, username: str, password: str):
     """
     Se connecte à Chess.com, gère les cookies/pop-ups, navigue vers l'URL du jeu,
@@ -211,21 +226,18 @@ async def get_pgn_from_chess_com(url: str, username: str, password: str):
     videos_dir.mkdir(exist_ok=True) # Assure que le dossier d'enregistrement vidéo existe
     
     # 1. Démarrer Xvfb (Virtual Framebuffer)
-    # Nécessaire pour simuler un écran sur les serveurs headless Linux afin que Chromium puisse "dessiner".
     xvfb_process = None
     try:
         print(f"Starting Xvfb on display {DISPLAY_NUM}...")
-        # Commande pour lancer Xvfb avec la résolution et la profondeur de couleur spécifiées
         xvfb_command = ['Xvfb', DISPLAY_NUM, '-screen', '0', f'{VIDEO_WIDTH}x{VIDEO_HEIGHT}x24', '+extension', 'GLX', '+render', '-noreset']
         xvfb_process = subprocess.Popen(xvfb_command, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        await asyncio.sleep(2) # Laisser à Xvfb le temps de démarrer
+        await asyncio.sleep(2)
         print("Xvfb started successfully.")
     except Exception as e:
         print(f"ERREUR: Échec du démarrage de Xvfb: {e}. Assurez-vous que Xvfb est installé sur votre serveur.")
         raise ScrapingError(f"Failed to start Xvfb: {e}")
 
     # 2. Démarrer FFmpeg pour capturer l'affichage de Xvfb et l'envoyer à notre script Python
-    # Le flux vidéo brut de FFmpeg sera lu par OpenCV dans un thread séparé.
     ffmpeg_process = None
     try:
         print("Starting FFmpeg to capture Xvfb display...")
@@ -244,30 +256,27 @@ async def get_pgn_from_chess_com(url: str, username: str, password: str):
         ffmpeg_process = subprocess.Popen(ffmpeg_command, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
         print("FFmpeg capture process started.")
 
-        # Thread pour lire les frames de FFmpeg et les mettre à jour pour le stream Flask
         def read_ffmpeg_output():
             global video_frame 
-            bytes_per_frame = VIDEO_WIDTH * VIDEO_HEIGHT * 3 # 3 bytes per pixel for bgr24
+            bytes_per_frame = VIDEO_WIDTH * VIDEO_HEIGHT * 3 
             while True:
-                # Lire la quantité de bytes correspondant à une frame complète
                 in_bytes = ffmpeg_process.stdout.read(bytes_per_frame)
-                if not in_bytes: # Si plus de bytes (FFmpeg terminé ou erreur)
+                if not in_bytes:
                     print("FFmpeg output stream ended or encountered an error.")
                     break
                 
-                # Convertir les bytes bruts en un tableau NumPy (frame OpenCV)
                 frame = np.frombuffer(in_bytes, np.uint8).reshape((VIDEO_HEIGHT, VIDEO_WIDTH, 3))
-                with video_lock: # Protège l'accès à video_frame
+                with video_lock:
                     video_frame = frame
         
         ffmpeg_thread = threading.Thread(target=read_ffmpeg_output)
-        ffmpeg_thread.daemon = True # Le thread se terminera lorsque le programme principal se terminera
+        ffmpeg_thread.daemon = True
         ffmpeg_thread.start()
         print("FFmpeg frame reader thread started.")
 
     except Exception as e:
         print(f"ERREUR: Échec du démarrage de FFmpeg: {e}. Assurez-vous que FFmpeg est installé sur votre serveur.")
-        if xvfb_process: xvfb_process.terminate() # Tente de nettoyer Xvfb si FFmpeg échoue
+        if xvfb_process: xvfb_process.terminate()
         raise ScrapingError(f"Failed to start FFmpeg: {e}")
 
     stealth = Stealth()
@@ -275,9 +284,9 @@ async def get_pgn_from_chess_com(url: str, username: str, password: str):
     browser_args = ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--disable-gpu', f'--display={DISPLAY_NUM}']
 
     async with stealth.use_async(async_playwright()) as p:
-        browser = await p.chromium.launch(headless=False, args=browser_args) # headless=False pour le stream
+        browser = await p.chromium.launch(headless=False, args=browser_args)
         context = await browser.new_context(
-            record_video_dir=str(videos_dir), # L'enregistrement local est maintenu pour le !cam
+            record_video_dir=str(videos_dir),
             record_video_size={"width": VIDEO_WIDTH, "height": VIDEO_HEIGHT},
             base_url="https://www.chess.com"
         )
@@ -286,36 +295,36 @@ async def get_pgn_from_chess_com(url: str, username: str, password: str):
         try:
             print("Navigating to login page for streaming...")
             await page.goto("/login_and_go", timeout=90000)
-            await asyncio.sleep(2) # Attente initiale pour les popups immédiats
+            await asyncio.sleep(2)
             handled_blocker = await handle_potential_blockers(page, "Before Login Attempt (Stream)")
             if handled_blocker:
                 print("Potential blocker handled. Giving page time to settle for stream.")
-                await asyncio.sleep(2) # Attendre un peu si un bloqueur a été géré
+                await asyncio.sleep(2)
 
             print("Waiting 5 seconds before login action for stream...")
-            await asyncio.sleep(5) # Attente demandée
+            await asyncio.sleep(5)
 
             login_successful = False
-            for attempt in range(3): # Tenter la connexion plusieurs fois
+            for attempt in range(3):
                 print(f"Login attempt {attempt + 1} for stream...")
                 try:
                     await page.get_by_placeholder("Username, Phone, or Email").fill(username)
                     await page.get_by_placeholder("Password").fill(password)
                     await page.get_by_role("button", name="Log In").click()
                     
-                    await page.wait_for_url("**/home", timeout=15000) # Attendre la redirection vers la page d'accueil
+                    await page.wait_for_url("**/home", timeout=15000)
                     print("Login successful for stream.")
                     login_successful = True
-                    break # Sortir de la boucle si la connexion est réussie
+                    break
                 except PlaywrightTimeoutError as e:
                     print(f"Login attempt {attempt + 1} failed (timeout): {e}. Checking for blockers for stream...")
                     blocker_handled = await handle_potential_blockers(page, f"After Login Fail (Attempt {attempt + 1}, Stream)")
                     if not blocker_handled:
                         print(f"No known blocker handled after failed login attempt {attempt + 1} for stream. Retrying...")
-                    await asyncio.sleep(3) # Attendre avant de retenter
+                    await asyncio.sleep(3)
                 except Exception as e:
                     print(f"An unexpected error occurred during login attempt {attempt + 1} for stream: {e}. Retrying...")
-                    await asyncio.sleep(3) # Attendre avant de retenter
+                    await asyncio.sleep(3)
 
             if not login_successful:
                 raise ScrapingError("Failed to log in to Chess.com after multiple attempts (Stream).")
@@ -332,7 +341,7 @@ async def get_pgn_from_chess_com(url: str, username: str, password: str):
             pgn_text = await page.input_value('textarea.share-menu-tab-pgn-textarea')
             print("PGN extracted for stream.")
 
-            video_path = await page.video.path() # Récupère le chemin de la vidéo enregistrée localement
+            video_path = await page.video.path()
             return pgn_text, video_path
 
         except Exception as e:
@@ -344,13 +353,11 @@ async def get_pgn_from_chess_com(url: str, username: str, password: str):
             except Exception as debug_e:
                 print(f"Error during debug data collection (stream): {debug_e}")
             finally:
-                pass # Le nettoyage final est dans le bloc finally global
+                pass
             raise ScrapingError(f"Scraping failed (Stream): {e}", screenshot_bytes, video_path)
         finally:
-            # Assurez-vous que le navigateur Playwright est fermé après la tâche
             if 'browser' in locals() and browser:
                 await browser.close()
-            # Nettoyage des processus FFmpeg et Xvfb
             if ffmpeg_process and ffmpeg_process.poll() is None:
                 print("Terminating FFmpeg process...")
                 ffmpeg_process.terminate()
@@ -431,22 +438,11 @@ async def get_chess_pgn(ctx, url: str):
     if "chess.com/game/live/" not in url and "chess.com/play/game/" not in url:
         return await ctx.send("❌ URL invalide. Veuillez fournir une URL de partie Chess.com valide.")
     
-    # --- IMPORTANT POUR RAILWAY ---
-    # Railway n'a pas de variable d'environnement comme RENDER_EXTERNAL_HOSTNAME.
-    # L'URL publique de ton service Railway est disponible sur le dashboard de ton projet.
-    # La meilleure pratique est de la définir comme une variable d'environnement dans Railway,
-    # par exemple 'RAILWAY_PUBLIC_URL', ou de demander à l'utilisateur de la récupérer manuellement.
-    
-    # Option 1: Définir RAILWAY_PUBLIC_URL dans les variables d'environnement de ton service Railway
-    railway_public_url = os.getenv('RAILWAY_PUBLIC_URL') # ex: https://ton-projet-xxxxxxxxxx.up.railway.app
+    railway_public_url = os.getenv('RAILWAY_PUBLIC_URL') 
     
     if railway_public_url:
-        # En production sur Railway, le port n'est pas inclus dans l'URL publique fournie par Railway.
-        # Le proxy inverse de Railway gère le mappage du port 443 externe vers ton VIDEO_STREAM_PORT interne.
         stream_url = f"{railway_public_url}/video_feed"
     else:
-        # Pour les tests en local ou si RAILWAY_PUBLIC_URL n'est pas définie (fallback)
-        # Note: En local, le port est nécessaire. Sur Railway, le port est géré par leur proxy.
         stream_url = f"http://localhost:{VIDEO_STREAM_PORT}/video_feed"
         await ctx.send("⚠️ La variable d'environnement `RAILWAY_PUBLIC_URL` n'est pas définie. "
                        "Assurez-vous de la définir sur votre tableau de bord Railway pour que le lien du stream fonctionne correctement en production.")
@@ -461,14 +457,12 @@ async def get_chess_pgn(ctx, url: str):
     try:
         pgn, video_path = await get_pgn_from_chess_com(url, CHESS_USERNAME, CHESS_PASSWORD)
         
-        # Enregistrement local de la vidéo pour la commande !cam après la fin du stream
         if video_path:
             last_video_paths[ctx.channel.id] = video_path
         
         await msg.edit(content="✅ PGN récupéré. Analyse de la partie avec Stockfish en cours...")
         annotations = analyse_pgn_with_stockfish(pgn)
         
-        # Envoi des annotations par morceaux si elles sont trop longues pour un seul message Discord
         response = "\n".join(annotations)
         if len(response) > 2000:
             chunks = [response[i:i + 2000] for i in range(0, len(response), 2000)]
@@ -481,14 +475,13 @@ async def get_chess_pgn(ctx, url: str):
                        f"Utilisez `!cam` si le bot a rencontré un problème pour voir la vidéo de débogage finale.")
 
     except ScrapingError as e:
-        # En cas d'erreur de scraping, nettoyer les processus et envoyer le debug
         await msg.edit(content=f"❌ Échec lors du scraping de la partie Chess.com: {e.args[0]}")
         if e.video_path:
             last_video_paths[ctx.channel.id] = e.video_path
             await ctx.send("📹 Une vidéo de débogage est disponible (si l'enregistrement a pu être finalisé). Utilisez `!cam` pour la voir.")
         if e.screenshot_bytes:
             await ctx.send("📸 Capture d'écran de l'erreur :", file=discord.File(io.BytesIO(e.screenshot_bytes), "debug_screenshot.png"))
-        print(f"Scraping Error: {e.args[0]}") # Pour les logs du bot
+        print(f"Scraping Error: {e.args[0]}")
     except Exception as e:
         await msg.edit(content=f"❌ Une erreur inattendue est survenue: {e}")
         print(f"Unexpected Error: {e}")
@@ -507,7 +500,6 @@ async def send_last_video(ctx):
     if not video_file.exists():
         return await ctx.send("❌ Le fichier vidéo n'existe plus ou a été déplacé.")
     
-    # Vérifie la taille du fichier avant de l'envoyer (limite Discord de 8 Mo)
     if video_file.stat().st_size < DISCORD_FILE_LIMIT_BYTES:
         try:
             await ctx.send("📹 Voici la dernière vidéo de débogage :", file=discord.File(str(video_file), "debug_video.webm"))
@@ -556,7 +548,7 @@ class WatcherBot(twitch_commands.Bot):
         elif self.mode == WatcherMode.MIRROR:
             await self.target_discord_channel.send(f"**{author}** ({message.channel.name}): {message.content}"[:2000])
         
-        await self.handle_commands(message) # Important pour que les commandes Twitch fonctionnent
+        await self.handle_commands(message)
 
     async def stop_task(self):
         """Arrête la surveillance ou le miroir du chat Twitch."""
@@ -631,7 +623,6 @@ async def on_ready():
     print(f"Bot Discord connecté en tant que {bot.user} (ID: {bot.user.id})")
     print(f"Version de Discord.py : {discord.__version__}")
     print("Prêt à recevoir des commandes !")
-    # Vous pouvez ajouter ici un message de démarrage dans un canal spécifique si vous voulez.
 
 @bot.event
 async def on_command_error(ctx, error):
@@ -641,12 +632,10 @@ async def on_command_error(ctx, error):
     elif isinstance(error, commands.BadArgument):
         await ctx.send(f"❌ Mauvais argument fourni. Vérifiez votre saisie.")
     elif isinstance(error, commands.CommandNotFound):
-        # Ignorer les erreurs de commande non trouvée pour ne pas spammer le chat
         pass
     elif isinstance(error, commands.CheckFailure):
         await ctx.send("🚫 Vous n'avez pas la permission d'utiliser cette commande.")
     else:
-        # Pour les erreurs inattendues, logguer et informer l'utilisateur
         print(f"Erreur inattendue dans la commande {ctx.command}: {error}")
         await ctx.send(f"❌ Une erreur inattendue est survenue lors de l'exécution de la commande.")
 
@@ -656,21 +645,17 @@ async def main():
     Fonction principale pour lancer l'application Flask (stream), le bot Discord
     et le bot Twitch de manière concurrente.
     """
-    # 1. Démarrer l'application Flask dans un thread séparé
     flask_thread = threading.Thread(target=run_flask_app)
-    flask_thread.daemon = True # Le thread se termine si le programme principal (les bots) s'arrête
+    flask_thread.daemon = True
     flask_thread.start()
     print(f"Flask app for video streaming started on port {VIDEO_STREAM_PORT}")
 
-    # 2. Initialiser le bot Twitch et l'attacher au bot Discord
     twitch_bot = WatcherBot(bot)
     bot.twitch_bot = twitch_bot 
     
-    # 3. Lancer les bots Discord et Twitch de manière asynchrone
-    # asyncio.gather permet d'exécuter plusieurs coroutines en parallèle.
     await asyncio.gather(
-        bot.start(DISCORD_TOKEN), # Démarre le bot Discord
-        twitch_bot.start()       # Démarre le bot Twitch
+        bot.start(DISCORD_TOKEN),
+        twitch_bot.start()
     )
 
 if __name__ == "__main__":
