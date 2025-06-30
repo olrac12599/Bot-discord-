@@ -1,41 +1,70 @@
-# Base Python officielle
+# Utiliser une image Python officielle (basée sur Debian)
 FROM python:3.11-slim
 
-# Installer dépendances système nécessaires (navigateur + ffmpeg + GUI headless)
+# Installer les dépendances système nécessaires pour Playwright, Chromium et Selenium
 RUN apt-get update && apt-get install -y \
-    ffmpeg \
     wget \
     curl \
-    unzip \
-    chromium \
-    chromium-driver \
-    libglib2.0-0 \
+    gnupg \
+    ca-certificates \
+    fonts-liberation \
+    libatk-bridge2.0-0 \
+    libatk1.0-0 \
+    libcups2 \
+    libdbus-1-3 \
+    libdrm2 \
+    libgbm1 \
+    libnspr4 \
     libnss3 \
-    libgconf-2-4 \
+    libxcomposite1 \
+    libxdamage1 \
+    libxrandr2 \
+    xdg-utils \
+    libx11-xcb1 \
     libxss1 \
     libasound2 \
-    libxtst6 \
-    libgtk-3-0 \
-    libsm6 \
-    libxext6 \
-    libxrender-dev \
-    && apt-get clean \
+    libpangocairo-1.0-0 \
+    libpango-1.0-0 \
+    libxshmfence1 \
+    libxcb1 \
+    libx11-6 \
+    unzip \
+    fonts-ipafont-gothic \
+    fonts-wqy-zenhei \
+    fonts-thai-tlwg \
+    fonts-kacst \
+    fonts-symbola \
+    chromium-driver \
+    chromium \
+    ffmpeg \
     && rm -rf /var/lib/apt/lists/*
 
-# Définir les variables d’environnement pour Selenium
-ENV CHROME_BIN=/usr/bin/chromium
-ENV CHROMEDRIVER_PATH=/usr/bin/chromedriver
-ENV VIDEO_PATH=recording.mp4
+# Mettre à jour ChromeDriver vers la version compatible avec Chromium installé (optionnel mais conseillé)
+RUN chromedriver --version
 
-# Définir le dossier de travail
+# Installer les packages Python nécessaires
+COPY requirements.txt /app/requirements.txt
+RUN pip install --no-cache-dir -r /app/requirements.txt
+
+# Installer les navigateurs Playwright
+RUN playwright install --with-deps
+
+# Copier le code dans le container
 WORKDIR /app
+COPY . /app
 
-# Copier tous les fichiers
-COPY . .
+# Variables d'environnement (à adapter en prod, mieux via docker-compose ou variables d'env Docker)
+ENV PYTHONUNBUFFERED=1
+ENV DISCORD_TOKEN=""
+ENV TWITCH_CLIENT_ID=""
+ENV TWITCH_TOKEN=""
+ENV TTV_BOT_NICKNAME=""
+ENV TTV_BOT_TOKEN=""
+ENV CHESS_USERNAME=""
+ENV CHESS_PASSWORD=""
 
-# Installer les dépendances Python
-RUN pip install --upgrade pip
-RUN pip install -r requirements.txt
+# Expose le port si nécessaire (pas utile pour un bot Discord mais bon)
+EXPOSE 8080
 
-# Commande de lancement du bot
-CMD ["python", "main.py"]
+# Commande pour lancer le bot
+CMD ["python", "bot.py"]
