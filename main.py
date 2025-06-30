@@ -39,7 +39,7 @@ STOCKFISH_PATH = "/usr/games/stockfish"
 VIDEO_STREAM_PORT = int(os.getenv("PORT", 5000))
 
 # *** MODIFICATION CLÉ: Augmentation de la résolution pour s'assurer que tous les éléments sont visibles ***
-VIDEO_WIDTH, VIDEO_HEIGHT = 1280, 720 # Augmenté à une résolution plus standard pour le web
+VIDEO_WIDTH, VIDEO_HEIGHT = 1280, 1000 # Augmenté à une résolution plus standard pour le web
 FPS = 10 # Maintenir un FPS modéré pour équilibrer les ressources
 DISPLAY_NUM = ":99"
 
