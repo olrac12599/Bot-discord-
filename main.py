@@ -6,46 +6,45 @@ import os
 import asyncio
 from enum import Enum, auto
 from playwright.async_api import async_playwright, TimeoutError as PlaywrightTimeoutError
-from playwright_stealth import Stealth  # ✅ Utilisation correcte
+from playwright_stealth import Stealth
 import io
 from pathlib import Path
+from stockfish import Stockfish
+import chess.pgn
 
 # --- CONFIGURATION ---
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
-TWITCH_CLIENT_ID = os.getenv("TWITCH_CLIENT_ID")
-TWITCH_TOKEN = os.getenv("TWITCH_TOKEN")
-TTV_BOT_NICKNAME = os.getenv("TTV_BOT_NICKNAME")
 TTV_BOT_TOKEN = os.getenv("TTV_BOT_TOKEN")
+TTV_BOT_NICKNAME = os.getenv("TTV_BOT_NICKNAME")
 CHESS_USERNAME = os.getenv("CHESS_USERNAME")
 CHESS_PASSWORD = os.getenv("CHESS_PASSWORD")
-DISCORD_FILE_LIMIT_BYTES = 8 * 1024 * 1024  # 8 Mo
+DISCORD_FILE_LIMIT_BYTES = 8 * 1024 * 1024
+STOCKFISH_PATH = "/usr/games/stockfish"  # À adapter si besoin
 
-if not all([DISCORD_TOKEN, TWITCH_CLIENT_ID, TWITCH_TOKEN, TTV_BOT_NICKNAME, TTV_BOT_TOKEN]):
-    raise ValueError("ERREUR CRITIQUE: Variables d'environnement Twitch/Discord manquantes.")
+if not all([DISCORD_TOKEN, TTV_BOT_NICKNAME, TTV_BOT_TOKEN]):
+    raise ValueError("Variables d'environnement Discord/Twitch manquantes.")
 if not all([CHESS_USERNAME, CHESS_PASSWORD]):
-    raise ValueError("ERREUR CRITIQUE: CHESS_USERNAME et CHESS_PASSWORD doivent être définis.")
+    raise ValueError("CHESS_USERNAME et CHESS_PASSWORD requis.")
 
-# --- INITIALISATION ET STOCKAGE ---
+# --- INITIALISATION DISCORD ---
 intents = discord.Intents.default()
 intents.message_content = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 last_video_paths = {}
 
-# --- EXCEPTION PERSONNALISÉE ---
+# --- ERREUR CUSTOM ---
 class ScrapingError(Exception):
     def __init__(self, message, screenshot_bytes=None, video_path=None):
         super().__init__(message)
         self.screenshot_bytes = screenshot_bytes
         self.video_path = video_path
 
-# --- FONCTION DE SCRAPING AVEC STEALTH ---
-async def get_pgn_from_chess_com(url: str, username: str, password: str) -> (str, str):
+# --- PGN SCRAPER ---
+async def get_pgn_from_chess_com(url: str, username: str, password: str):
     videos_dir = Path("debug_videos")
     videos_dir.mkdir(exist_ok=True)
-    max_retries = 3
+    stealth = Stealth()
     browser_args = ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--disable-gpu']
-
-    stealth = Stealth()  # ✅ Nouvelle instance
 
     async with stealth.use_async(async_playwright()) as p:
         browser = await p.chromium.launch(headless=True, args=browser_args)
@@ -57,41 +56,16 @@ async def get_pgn_from_chess_com(url: str, username: str, password: str) -> (str
         page = await context.new_page()
 
         try:
-            login_successful = False
-            for attempt in range(max_retries):
-                print(f"Tentative de connexion n°{attempt + 1}/{max_retries}...")
-                await page.goto("/login_and_go", timeout=90000)
-                await page.wait_for_load_state('domcontentloaded')
-
-                if await page.is_visible("text=Verify you are human"):
-                    raise ScrapingError("Bloqué par le CAPTCHA de Cloudflare avant la connexion.")
-
-                try:
-                    await page.get_by_role("button", name="I Accept").click(timeout=5000)
-                except PlaywrightTimeoutError:
-                    pass
-
-                await page.get_by_placeholder("Username, Phone, or Email").type(username, delay=50)
-                await page.get_by_placeholder("Password").type(password, delay=50)
-                await page.get_by_role("button", name="Log In").click()
-                
-                try:
-                    await page.wait_for_url("**/home", timeout=15000)
-                    login_successful = True
-                    break
-                except PlaywrightTimeoutError:
-                    if await page.is_visible("text=This password is incorrect"):
-                        continue
-                    else:
-                        raise ScrapingError("Erreur inattendue après la tentative de connexion.")
-
-            if not login_successful:
-                raise ScrapingError(f"Échec de la connexion après {max_retries} tentatives.")
+            await page.goto("/login_and_go", timeout=90000)
+            await page.get_by_placeholder("Username, Phone, or Email").type(username)
+            await page.get_by_placeholder("Password").type(password)
+            await page.get_by_role("button", name="Log In").click()
+            await page.wait_for_url("**/home", timeout=15000)
 
             await page.goto(url, timeout=90000)
-            await page.locator("button.share-button-component").click(timeout=30000)
-            await page.locator('div.share-menu-tab-component-header:has-text("PGN")').click(timeout=20000)
-            pgn_text = await page.input_value('textarea.share-menu-tab-pgn-textarea', timeout=20000)
+            await page.locator("button.share-button-component").click()
+            await page.locator('div.share-menu-tab-component-header:has-text("PGN")').click()
+            pgn_text = await page.input_value('textarea.share-menu-tab-pgn-textarea')
 
             video_path = await page.video.path()
             await context.close()
@@ -99,147 +73,170 @@ async def get_pgn_from_chess_com(url: str, username: str, password: str) -> (str
             return pgn_text, video_path
 
         except Exception as e:
-            screenshot_bytes = None
-            video_path = None
-            try:
-                video_path = await page.video.path()
-            except:
-                pass
+            screenshot_bytes, video_path = None, None
+            try: video_path = await page.video.path()
+            except: pass
             if not page.is_closed():
                 screenshot_bytes = await page.screenshot(full_page=True)
             await context.close()
             await browser.close()
+            raise ScrapingError(str(e), screenshot_bytes, video_path)
 
-            if isinstance(e, ScrapingError):
-                raise ScrapingError(e, screenshot_bytes=screenshot_bytes, video_path=video_path)
-            else:
-                raise ScrapingError(f"Détails: {e}", screenshot_bytes=screenshot_bytes, video_path=video_path)
+# --- STOCKFISH ANALYSE ---
+def analyse_pgn_with_stockfish(pgn_text):
+    stockfish = Stockfish(path=STOCKFISH_PATH)
+    stockfish.set_skill_level(20)
+    stockfish.set_depth(15)
 
-# --- CLASSE BOT TWITCH ---
-class WatcherMode(Enum):
-    IDLE, KEYWORD, MIRROR = auto(), auto(), auto()
+    game = chess.pgn.read_game(io.StringIO(pgn_text))
+    board, annotations = game.board(), []
 
-class WatcherBot(twitch_commands.Bot):
-    def __init__(self, discord_bot_instance):
-        super().__init__(token=TTV_BOT_TOKEN, prefix='!', initial_channels=[])
-        self.discord_bot = discord_bot_instance
-        self.mode = WatcherMode.IDLE
-        self.current_channel_name, self.target_discord_channel, self.keyword_to_watch = None, None, None
+    for move in game.mainline_moves():
+        stockfish.set_fen_position(board.fen())
+        best = stockfish.get_best_move()
+        stockfish.make_moves_from_current_position([best])
+        best_eval = stockfish.get_evaluation()
+        stockfish.set_fen_position(board.fen())
+        stockfish.make_moves_from_current_position([move.uci()])
+        played_eval = stockfish.get_evaluation()
 
-    async def event_ready(self):
-        print(f"Bot Twitch '{TTV_BOT_NICKNAME}' prêt.")
+        delta = 0
+        if best_eval['type'] == 'cp' and played_eval['type'] == 'cp':
+            delta = played_eval['value'] - best_eval['value']
+        elif best_eval['type'] == 'mate' or played_eval['type'] == 'mate':
+            delta = 1000
 
-    async def stop_task(self):
-        if self.current_channel_name:
-            await self.part_channels([self.current_channel_name])
-        self.mode, self.current_channel_name, self.target_discord_channel, self.keyword_to_watch = WatcherMode.IDLE, None, None, None
-        print("Surveillance Twitch arrêtée.")
+        if best == move.uci():
+            verdict = "théorique"
+        elif abs(delta) < 50:
+            verdict = "acceptable"
+        elif abs(delta) < 150:
+            verdict = "imprécision"
+        elif abs(delta) < 300:
+            verdict = "erreur"
+        else:
+            verdict = "blunder"
 
-    async def start_keyword_watch(self, twitch_channel, keyword, discord_channel):
-        await self.stop_task()
-        self.mode = WatcherMode.KEYWORD
-        self.keyword_to_watch = keyword
-        self.target_discord_channel = discord_channel
-        self.current_channel_name = twitch_channel.lower()
-        await self.join_channels([self.current_channel_name])
-        print(f"Surveillance mot-clé activée sur '{self.current_channel_name}'.")
+        color = "Blanc" if board.turn == chess.BLACK else "Noir"
+        annotations.append(f"{color} joue {board.san(move)} : {verdict}")
+        board.push(move)
 
-    async def start_mirror(self, twitch_channel, discord_channel):
-        await self.stop_task()
-        self.mode = WatcherMode.MIRROR
-        self.target_discord_channel = discord_channel
-        self.current_channel_name = twitch_channel.lower()
-        await self.join_channels([self.current_channel_name])
-        print(f"Mode miroir activé pour '{self.current_channel_name}'.")
+    return annotations
 
-    async def event_message(self, message):
-        if message.echo or self.mode == WatcherMode.IDLE:
-            return
-        author_name = message.author.name if message.author else "Quelqu’un"
-        if self.mode == WatcherMode.KEYWORD and self.keyword_to_watch.lower() in message.content.lower():
-            embed = discord.Embed(
-                title="🚨 Mot-Clé Twitch détecté !",
-                description=message.content,
-                color=discord.Color.orange()
-            )
-            embed.set_footer(text=f"Chaîne : {message.channel.name} | Auteur : {author_name}")
-            await self.target_discord_channel.send(embed=embed)
-        elif self.mode == WatcherMode.MIRROR:
-            await self.target_discord_channel.send(f"**{author_name}**: {message.content}"[:2000])
-
-# --- COMMANDES DISCORD ---
+# --- DISCORD COMMANDES ---
 @bot.command(name="chess")
 async def get_chess_pgn(ctx, url: str):
     if "chess.com/game/live/" not in url and "chess.com/play/game/" not in url:
-        return await ctx.send("❌ URL invalide. L'URL doit provenir d'une partie sur Chess.com.")
-    msg = await ctx.send("🕵️ **Lancement du scraping en mode furtif...** Connexion à Chess.com.")
+        return await ctx.send("❌ URL invalide.")
+    msg = await ctx.send("🕵️ Connexion Chess.com en cours...")
     try:
         pgn, video_path = await get_pgn_from_chess_com(url, CHESS_USERNAME, CHESS_PASSWORD)
         if video_path:
             last_video_paths[ctx.channel.id] = video_path
-        pgn_short = (pgn[:1900] + "...") if len(pgn) > 1900 else pgn
-        await msg.edit(content=f"✅ **PGN récupéré !**\n```\n{pgn_short}\n```\n*Utilisez `!cam` pour voir la vidéo de l'opération.*")
+        await msg.edit(content="✅ PGN récupéré. Analyse en cours...")
+        annotations = analyse_pgn_with_stockfish(pgn)
+        for ligne in annotations:
+            await ctx.send(ligne)
     except ScrapingError as e:
-        await msg.edit(content=f"❌ **Erreur de scraping.**")
+        await msg.edit(content="❌ Échec lors du scraping.")
         if e.video_path:
             last_video_paths[ctx.channel.id] = e.video_path
-        files = [discord.File(io.BytesIO(e.screenshot_bytes), "debug.png")] if e.screenshot_bytes else []
-        await ctx.send(f"**Erreur :** {e}", files=files)
+        if e.screenshot_bytes:
+            await ctx.send("📸 Capture d'écran :", file=discord.File(io.BytesIO(e.screenshot_bytes), "debug.png"))
         if e.video_path:
-            await ctx.send(f"Utilisez `!cam` pour voir la vidéo de la session qui a échoué.")
-    except Exception as e:
-        await msg.edit(content=f"❌ Erreur système: {e}")
+            await ctx.send("📹 Vidéo dispo via `!cam`")
 
 @bot.command(name="cam")
 async def send_last_video(ctx):
-    video_path_str = last_video_paths.get(ctx.channel.id)
-    if not video_path_str:
-        return await ctx.send("❌ Aucune vidéo récente trouvée.")
-    video_file = Path(video_path_str)
+    video_path = last_video_paths.get(ctx.channel.id)
+    if not video_path:
+        return await ctx.send("❌ Aucune vidéo trouvée.")
+    video_file = Path(video_path)
     if not video_file.exists():
-        return await ctx.send("❌ Fichier vidéo introuvable.")
+        return await ctx.send("❌ Fichier manquant.")
     if video_file.stat().st_size < DISCORD_FILE_LIMIT_BYTES:
-        await ctx.send("📹 Voici la vidéo de la dernière opération `!chess` :", file=discord.File(str(video_file), "debug_video.webm"))
+        await ctx.send("📹 Vidéo :", file=discord.File(str(video_file), "debug_video.webm"))
     else:
         await ctx.send(f"📹 Vidéo trop lourde ({video_file.stat().st_size / 1_000_000:.2f} Mo).")
+
+# --- TWITCH MIRROR OPTIONNEL ---
+class WatcherMode(Enum): IDLE, KEYWORD, MIRROR = auto(), auto(), auto()
+
+class WatcherBot(twitch_commands.Bot):
+    def __init__(self, discord_bot):
+        super().__init__(token=TTV_BOT_TOKEN, prefix="!", initial_channels=[])
+        self.discord_bot = discord_bot
+        self.mode = WatcherMode.IDLE
+        self.current_channel_name = self.target_discord_channel = self.keyword_to_watch = None
+
+    async def event_ready(self):
+        print(f"Twitch bot '{TTV_BOT_NICKNAME}' connecté.")
+
+    async def event_message(self, message):
+        if message.echo or self.mode == WatcherMode.IDLE:
+            return
+        author = message.author.name if message.author else "Inconnu"
+        if self.mode == WatcherMode.KEYWORD and self.keyword_to_watch.lower() in message.content.lower():
+            embed = discord.Embed(title="Mot-Clé détecté", description=message.content, color=discord.Color.orange())
+            embed.set_footer(text=f"{message.channel.name} - {author}")
+            await self.target_discord_channel.send(embed=embed)
+        elif self.mode == WatcherMode.MIRROR:
+            await self.target_discord_channel.send(f"**{author}**: {message.content}"[:2000])
+
+    async def stop_task(self):
+        if self.current_channel_name:
+            await self.part_channels([self.current_channel_name])
+        self.mode = WatcherMode.IDLE
+        self.current_channel_name = self.target_discord_channel = self.keyword_to_watch = None
+
+    async def start_keyword_watch(self, channel, keyword, discord_channel):
+        await self.stop_task()
+        self.mode = WatcherMode.KEYWORD
+        self.keyword_to_watch = keyword
+        self.target_discord_channel = discord_channel
+        self.current_channel_name = channel.lower()
+        await self.join_channels([self.current_channel_name])
+
+    async def start_mirror(self, channel, discord_channel):
+        await self.stop_task()
+        self.mode = WatcherMode.MIRROR
+        self.target_discord_channel = discord_channel
+        self.current_channel_name = channel.lower()
+        await self.join_channels([self.current_channel_name])
 
 @bot.command(name="motcle")
 @commands.has_permissions(administrator=True)
 async def watch_keyword(ctx, streamer: str, *, keyword: str):
-    if hasattr(bot, 'twitch_bot'):
-        await bot.twitch_bot.start_keyword_watch(streamer, keyword, ctx.channel)
-        await ctx.send(f"✅ Surveillance activée pour **`{keyword}`** sur la chaîne de **`{streamer}`**.")
+    await bot.twitch_bot.start_keyword_watch(streamer, keyword, ctx.channel)
+    await ctx.send(f"🔍 Mot-clé `{keyword}` surveillé sur `{streamer}`.")
 
 @bot.command(name="tchat")
 @commands.has_permissions(administrator=True)
 async def mirror_chat(ctx, streamer: str):
-    if hasattr(bot, 'twitch_bot'):
-        await bot.twitch_bot.start_mirror(streamer, ctx.channel)
-        await ctx.send(f"✅ Mode miroir activé pour le tchat de **`{streamer}`**.")
+    await bot.twitch_bot.start_mirror(streamer, ctx.channel)
+    await ctx.send(f"💬 Miroir activé sur le tchat de `{streamer}`.")
 
 @bot.command(name="stop")
 @commands.has_permissions(administrator=True)
-async def stop_twitch_watch(ctx):
-    if hasattr(bot, 'twitch_bot'):
-        await bot.twitch_bot.stop_task()
-        await ctx.send("🛑 Surveillance Twitch arrêtée.")
+async def stop_watch(ctx):
+    await bot.twitch_bot.stop_task()
+    await ctx.send("🛑 Surveillance Twitch stoppée.")
 
 @bot.command(name="ping")
 async def ping(ctx):
     await ctx.send(f"Pong! Latence : {round(bot.latency * 1000)}ms")
 
-# --- DÉMARRAGE ---
 @bot.event
 async def on_ready():
-    print(f"Bot Discord connecté en tant que {bot.user} !")
+    print(f"Bot Discord connecté en tant que {bot.user}")
 
 async def main():
-    twitch_bot_instance = WatcherBot(bot)
-    bot.twitch_bot = twitch_bot_instance
-    await asyncio.gather(bot.start(DISCORD_TOKEN), twitch_bot_instance.start())
+    twitch_bot = WatcherBot(bot)
+    bot.twitch_bot = twitch_bot
+    await asyncio.gather(bot.start(DISCORD_TOKEN), twitch_bot.start())
 
 if __name__ == "__main__":
     try:
         asyncio.run(main())
     except KeyboardInterrupt:
-        print("\nArrêt du bot.")
+        print("Bot stoppé.")
