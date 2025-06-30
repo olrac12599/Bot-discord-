@@ -15,7 +15,7 @@ import discord
 from discord.ext import commands
 import twitchio
 from twitchio.ext import commands as twitch_commands
-from playwright.async_api import async_playwright, Page, PlaywrightTimeoutError
+from playwright.async_api import async_playwright, Page, TimeoutError
 from playwright_stealth import stealth_async as Stealth
 import chess.pgn
 from stockfish import Stockfish
