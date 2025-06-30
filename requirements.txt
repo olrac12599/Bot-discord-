@@ -1,5 +1,7 @@
 discord.py
-twitchio
-playwright
-playwright-stealth
-python-chess
+selenium
+opencv-python
+mss
+moviepy
+python-dotenv
+chromedriver-autoinstaller
