@@ -1,4 +1,4 @@
-discord.py>=2.0.0
-twitchio>=2.0.0
-requests>=2.28.0
-python-chess>=1.999
+discord.py
+twitchio
+python-dotenv
+playwright
