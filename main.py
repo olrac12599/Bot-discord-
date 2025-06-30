@@ -15,8 +15,8 @@ import discord
 from discord.ext import commands
 import twitchio
 from twitchio.ext import commands as twitch_commands
-from playwright.async_api import async_playwright, Page, TimeoutError # CORRECTED: PlaywrightTimeoutError -> TimeoutError
-from playwright_stealth import Stealth # CORRECTED: stealth_async -> Stealth
+from playwright.async_api import async_playwright, Page, TimeoutError # CORRECTION ICI : PlaywrightTimeoutError -> TimeoutError
+from playwright_stealth import Stealth # CORRECTION ICI : stealth_async -> Stealth
 import chess.pgn
 from stockfish import Stockfish
 from flask import Flask, Response
@@ -33,10 +33,11 @@ CHESS_USERNAME = os.getenv("CHESS_USERNAME")
 CHESS_PASSWORD = os.getenv("CHESS_PASSWORD")
 DISCORD_FILE_LIMIT_BYTES = 8 * 1024 * 1024
 
-STOCKFISH_PATH = "/usr/games/stockfish" 
+STOCKFISH_PATH = "/usr/games/stockfish" # Assurez-vous que Stockfish est bien installé ici sur le système
 
 VIDEO_STREAM_PORT = int(os.getenv("PORT", 5000))
 
+# Résolution standard 16:9 pour éviter la déformation
 VIDEO_WIDTH, VIDEO_HEIGHT = 1280, 720
 FPS = 10
 DISPLAY_NUM = ":99"
@@ -76,18 +77,18 @@ intents.message_content = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 last_video_paths = {}
 
-# --- CUSTOM ERROR ---
+# --- ERREUR CUSTOM ---
 class ScrapingError(Exception):
     def __init__(self, message, screenshot_bytes=None, video_path=None):
         super().__init__(message)
         self.screenshot_bytes = screenshot_bytes
         self.video_path = video_path
 
-# --- AI-LIKE BLOCKER HANDLER (PREVIOUSLY CORRECTED & IMPROVED) ---
+# --- AI-LIKE BLOCKER HANDLER (CORRIGÉ ET AMÉLIORÉ) ---
 async def handle_potential_blockers(page: Page, context_description: str = "") -> bool:
     logger.info(f"[{context_description}] AI-like blocker handler: Checking for common pop-ups...")
     
-    # Strategy 1: Accept cookies or close info banners
+    # Stratégie 1: Accepter les cookies ou fermer les bannières d'information
     accept_selectors = [
         'button:has-text("I Accept")', 'button:has-text("J\'accepte")',
         '[aria-label="Accept"]', '[aria-label="J\'accepte"]',
@@ -101,21 +102,22 @@ async def handle_potential_blockers(page: Page, context_description: str = "") -
     for selector in accept_selectors:
         locator = page.locator(selector)
         try:
+            # Attendre que l'élément soit visible. C'est ici que 'Locator.wait_for' peut lever une TimeoutError.
             await locator.wait_for(state='visible', timeout=3000)
-            if await locator.is_visible():
-                logger.info(f"[{context_description}] Found potential cookie/accept button with selector '{selector}'. Attempting to scroll into view and click.")
-                await locator.scroll_into_view_if_needed(timeout=3000)
-                await locator.wait_for(state='enabled', timeout=3000)
-                await locator.click(force=True, timeout=5000)
-                await asyncio.sleep(2)
-                logger.info(f"[{context_description}] Successfully clicked cookie/accept button using selector '{selector}'.")
-                return True
-        except TimeoutError: # CORRECTED HERE
-            logger.debug(f"[{context_description}] Cookie/accept button with selector '{selector}' not visible/enabled on page.")
+            
+            logger.info(f"[{context_description}] Found potential cookie/accept button with selector '{selector}'. Attempting to scroll into view and click.")
+            await locator.scroll_into_view_if_needed() # Pas de timeout sur scroll_into_view_if_needed()
+            await locator.wait_for(state='enabled', timeout=3000) # S'assurer qu'il est cliquable
+            await locator.click(force=True, timeout=5000)
+            await asyncio.sleep(2)
+            logger.info(f"[{context_description}] Successfully clicked cookie/accept button using selector '{selector}'.")
+            return True # Bloqueur géré, sortir
+        except TimeoutError: # Correction : capturer TimeoutError
+            logger.debug(f"[{context_description}] Cookie/accept button with selector '{selector}' not visible/enabled within timeout on page.")
         except Exception as e:
             logger.warning(f"[{context_description}] Error clicking cookie/accept button with selector '{selector}': {e}")
 
-    # Strategy 2: Handle cookie pop-ups within IFRAMES
+    # Stratégie 2: Gérer les pop-ups de cookies dans des IFRAMES
     iframe_selectors = [
         'iframe[title*="Privacy"]', 'iframe[name*="privacy"]',
         'iframe[src*="privacy-policy"]', 'iframe[src*="cookie-consent"]',
@@ -134,52 +136,54 @@ async def handle_potential_blockers(page: Page, context_description: str = "") -
                     for selector in accept_selectors:
                         iframe_locator = iframe.locator(selector)
                         try:
-                            await iframe_locator.wait_for(state='visible', timeout=3000)
-                            if await iframe_locator.is_visible():
-                                logger.info(f"[{context_description}] Found 'I Accept' button inside iframe with selector '{selector}'. Attempting to scroll into view and click.")
-                                await iframe_locator.scroll_into_view_if_needed(timeout=3000)
-                                await iframe_locator.wait_for(state='enabled', timeout=3000)
-                                await iframe_locator.click(force=True, timeout=5000)
-                                await asyncio.sleep(2)
-                                logger.info(f"[{context_description}] Successfully clicked button in iframe using selector '{selector}'.")
-                                return True
-                        except TimeoutError: # CORRECTED HERE
-                            logger.debug(f"[{context_description}] Cookie/accept button with selector '{selector}' not visible/enabled in iframe.")
+                            await iframe_locator.wait_for(state='visible', timeout=3000) # Attendre visibilité
+                            
+                            logger.info(f"[{context_description}] Found 'I Accept' button inside iframe with selector '{selector}'. Attempting to scroll into view and click.")
+                            await iframe_locator.scroll_into_view_if_needed() # Pas de timeout
+                            await iframe_locator.wait_for(state='enabled', timeout=3000) # Assurer cliquable
+                            await iframe_locator.click(force=True, timeout=5000)
+                            await asyncio.sleep(2)
+                            logger.info(f"[{context_description}] Successfully clicked button in iframe using selector '{selector}'.")
+                            return True # Bloqueur géré, sortir
+                        except TimeoutError: # Correction : capturer TimeoutError
+                            logger.debug(f"[{context_description}] Cookie/accept button with selector '{selector}' not visible/enabled within timeout in iframe.")
                         except Exception as e:
                             logger.warning(f"[{context_description}] Error clicking button in iframe with selector '{selector}': {e}")
-        except TimeoutError: # CORRECTED HERE
-            logger.debug(f"[{context_description}] Iframe with selector '{iframe_selector}' not found.")
+        except TimeoutError: # Correction : capturer TimeoutError
+            logger.debug(f"[{context_description}] Iframe with selector '{iframe_selector}' not found within timeout.")
         except Exception as e_iframe:
             logger.warning(f"[{context_description}] Error locating/accessing iframe {iframe_selector}: {e_iframe}")
 
-    # Strategy 3: Handle generic close pop-ups (e.g., newsletters, "No Thanks")
+    # Stratégie 3: Gérer les pop-ups génériques de fermeture
     try:
         close_button = page.locator(
             'button[aria-label="close"], button:has-text("No Thanks"), button:has-text("Not now"), '
             '.modal-close-button, .close-button, div[role="dialog"] >> button:has-text("No Thanks"), .x-button-icon, '
             'a.close-button, [data-qa="close-button"], ._modal_x_button'
         )
-        if await close_button.is_visible(timeout=2000):
+        # is_visible() sur un Locator peut prendre un timeout, mais ici une vérification rapide est souvent suffisante
+        if await close_button.is_visible(timeout=2000): # Le timeout est correct ici pour Locator.is_visible()
             logger.info(f"[{context_description}] Found generic pop-up. Attempting to click close/dismiss button.")
-            await close_button.scroll_into_view_if_needed(timeout=2000)
+            await close_button.scroll_into_view_if_needed()
             await close_button.click(force=True, timeout=3000)
             await asyncio.sleep(1)
-            if not await close_button.is_visible(timeout=1000):
+            # Re-vérifier la visibilité après le clic
+            if not await close_button.is_visible(timeout=1000): # Timeout est correct ici aussi
                 logger.info(f"[{context_description}] Successfully closed generic pop-up.")
                 return True
             else:
                 logger.warning(f"[{context_description}] Generic pop-up still visible after click, trying ESC key.")
                 await page.keyboard.press("Escape")
                 await asyncio.sleep(1)
-                if not await close_button.is_visible(timeout=1000):
+                if not await close_button.is_visible(timeout=1000): # Timeout est correct ici
                     logger.info(f"[{context_description}] Successfully closed generic pop-up with ESC key.")
                     return True
-    except TimeoutError: # CORRECTED HERE
-        logger.debug(f"[{context_description}] No generic close pop-up found.")
+    except TimeoutError: # Correction : capturer TimeoutError
+        logger.debug(f"[{context_description}] No generic close pop-up found (likely not visible within timeout).")
     except Exception as e:
         logger.warning(f"[{context_description}] Error handling generic pop-up: {e}")
 
-    # Strategy 4: Chess.com specific checks (welcome modals, etc.)
+    # Stratégie 4: Vérifications spécifiques à Chess.com
     try:
         chess_com_specific_close_selectors = [
             '.modal-dialog:has-text("Welcome to Chess.com") button[aria-label="close"]',
@@ -192,20 +196,20 @@ async def handle_potential_blockers(page: Page, context_description: str = "") -
         
         for selector in chess_com_specific_close_selectors:
             specific_close_button = page.locator(selector)
-            if await specific_close_button.is_visible(timeout=1000):
+            if await specific_close_button.is_visible(timeout=1000): # Timeout est correct ici pour Locator.is_visible()
                 logger.info(f"[{context_description}] Found Chess.com specific pop-up with selector '{selector}'. Closing it.")
-                await specific_close_button.scroll_into_view_if_needed(timeout=1000)
+                await specific_close_button.scroll_into_view_if_needed()
                 await specific_close_button.click(force=True, timeout=3000)
                 await asyncio.sleep(1)
-                if not await specific_close_button.is_visible(timeout=500):
+                if not await specific_close_button.is_visible(timeout=500): # Timeout est correct ici
                     logger.info(f"[{context_description}] Successfully closed Chess.com specific pop-up.")
                     return True
-    except TimeoutError: # CORRECTED HERE
-        logger.debug(f"[{context_description}] No Chess.com specific pop-up found.")
+    except TimeoutError: # Correction : capturer TimeoutError
+        logger.debug(f"[{context_description}] No Chess.com specific pop-up found (likely not visible within timeout).")
     except Exception as e:
         logger.warning(f"[{context_description}] Error handling Chess.com specific pop-up: {e}")
 
-    # Strategy 5: Handle "Aw, Snap!" message
+    # Stratégie 5: Gérer le message "Aw, Snap!"
     try:
         reload_button = page.get_by_role("button", name="Reload", exact=True)
         learn_more_link = page.get_by_text("Learn more", exact=True)
@@ -229,7 +233,7 @@ async def handle_potential_blockers(page: Page, context_description: str = "") -
             await learn_more_link.click(timeout=1000)
             await asyncio.sleep(3)
             return True
-    except TimeoutError: # CORRECTED HERE
+    except TimeoutError: # Correction : capturer TimeoutError
         logger.debug(f"[{context_description}] No 'Aw, Snap!' elements detected.")
     except Exception as e:
         logger.error(f"[{context_description}] Error handling 'Aw, Snap!' elements: {e}")
@@ -237,7 +241,7 @@ async def handle_potential_blockers(page: Page, context_description: str = "") -
     logger.info(f"[{context_description}] No known blockers handled after all strategies.")
     return False
 
-# --- PGN SCRAPER WITH STREAMING (PREVIOUSLY CORRECTED) ---
+# --- PGN SCRAPER AVEC STREAMING ---
 async def get_pgn_from_chess_com(url: str, username: str, password: str):
     videos_dir = Path("debug_videos")
     videos_dir.mkdir(exist_ok=True)
@@ -334,7 +338,7 @@ async def get_pgn_from_chess_com(url: str, username: str, password: str):
                     logger.info("Login successful.")
                     login_successful = True
                     break
-                except TimeoutError as e: # CORRECTED HERE
+                except TimeoutError as e: # Correction : capturer TimeoutError
                     logger.warning(f"Login attempt {attempt + 1} failed (timeout): {e}. Re-checking for blockers (may be new or persistent).")
                     await handle_potential_blockers(page, f"After Login Fail (Attempt {attempt + 1})")
                     await asyncio.sleep(3)
@@ -346,7 +350,6 @@ async def get_pgn_from_chess_com(url: str, username: str, password: str):
                 screenshot_bytes = None
                 if page and not page.is_closed():
                     screenshot_bytes = await page.screenshot(full_page=True)
-                # CHANGE HERE: Use a generic message or str(e) if e is captured earlier
                 raise ScrapingError("Failed to log in to Chess.com after multiple attempts.", screenshot_bytes=screenshot_bytes)
 
             logger.info(f"Navigating to game URL: {url}")
@@ -405,11 +408,9 @@ async def get_pgn_from_chess_com(url: str, username: str, password: str):
                 xvfb_process.wait(timeout=5)
             logger.info("Browser, FFmpeg, and Xvfb processes cleaned up.")
             
-        # VERY IMPORTANT CHANGE HERE: How 'e' is passed to ScrapingError
-        # Ensure 'e' is stringified cleanly to avoid issues with its internal representation.
+        # CORRECTION MAJEURE ICI : Assurer que le message d'erreur est propre
         error_message_to_pass = str(e)
-        # If 'e' is a TimeoutError, Playwright might put the old name in its string repr.
-        # This explicitly replaces it just in case.
+        # Ceci est une ligne défensive, au cas où l'objet d'erreur contiendrait encore l'ancienne chaîne
         error_message_to_pass = error_message_to_pass.replace("PlaywrightTimeoutError", "TimeoutError")
         
         raise ScrapingError(f"Scraping failed: {error_message_to_pass}", screenshot_bytes, video_path)
@@ -426,7 +427,7 @@ async def get_pgn_from_chess_com(url: str, username: str, password: str):
         logger.info("All processes cleaned up.")
 
 
-# --- STOCKFISH ANALYSIS (UNCHANGED) ---
+# --- STOCKFISH ANALYSE (INCHANGÉ) ---
 def analyse_pgn_with_stockfish(pgn_text):
     try:
         stockfish = Stockfish(path=STOCKFISH_PATH)
@@ -485,7 +486,7 @@ def analyse_pgn_with_stockfish(pgn_text):
 
     return annotations
 
-# --- DISCORD COMMANDS ---
+# --- DISCORD COMMANDES ---
 @bot.command(name="chess")
 async def get_chess_pgn(ctx, url: str):
     if "chess.com/game/live/" not in url and "chess.com/play/game/" not in url:
@@ -556,149 +557,4 @@ async def send_last_video(ctx):
                 video_data = io.BytesIO(f.read())
             await ctx.send("📹 Voici la dernière vidéo de débogage :", file=discord.File(video_data, "debug_video.webm"))
         except discord.HTTPException as http_exc:
-            await ctx.send(f"❌ Impossible d'envoyer la vidéo: {http_exc}. Elle est peut-être trop lourde ou corrompue.")
-            logger.error(f"Discord HTTPException while sending video: {http_exc}")
-        except Exception as exc:
-            await ctx.send(f"❌ Une erreur est survenue lors de l'envoi de la vidéo : {exc}")
-            logger.error(f"Error sending video: {exc}", exc_info=True)
-    else:
-        await ctx.send(f"📹 La vidéo de débogage est trop lourde pour être envoyée sur Discord "
-                       f"({video_file.stat().st_size / (1024 * 1024):.2f} Mo). "
-                       "La limite est de 8 Mo.")
-
-# --- TWITCH MIRROR OPTIONAL ---
-class WatcherMode(Enum):
-    IDLE = auto()
-    KEYWORD = auto()
-    MIRROR = auto()
-
-class WatcherBot(twitch_commands.Bot):
-    def __init__(self, discord_bot):
-        super().__init__(token=TTV_BOT_TOKEN, prefix="!", initial_channels=[])
-        self.discord_bot = discord_bot
-        self.mode = WatcherMode.IDLE
-        self.current_channel_name = None
-        self.target_discord_channel = None
-        self.keyword_to_watch = None
-
-    async def event_ready(self):
-        logger.info(f"Twitch bot '{TTV_BOT_NICKNAME}' connected and ready.")
-
-    async def event_message(self, message):
-        if message.echo or self.mode == WatcherMode.IDLE:
-            return
-
-        author = message.author.name if message.author else "Inconnu"
-        
-        if self.mode == WatcherMode.KEYWORD:
-            if self.keyword_to_watch and self.keyword_to_watch.lower() in message.content.lower():
-                embed = discord.Embed(title="Mot-Clé détecté sur Twitch", description=message.content, color=discord.Color.orange())
-                embed.set_footer(text=f"Chaîne: {message.channel.name} | Auteur: {author}")
-                await self.target_discord_channel.send(embed=embed)
-        elif self.mode == WatcherMode.MIRROR:
-            await self.target_discord_channel.send(f"**{author}** ({message.channel.name}): {message.content}"[:2000])
-        
-        await self.handle_commands(message)
-
-    async def stop_task(self):
-        if self.current_channel_name:
-            logger.info(f"Leaving Twitch channel: {self.current_channel_name}")
-            await self.part_channels([self.current_channel_name])
-        self.mode = WatcherMode.IDLE
-        self.current_channel_name = None
-        self.target_discord_channel = None
-        self.keyword_to_watch = None
-        logger.info("Twitch watch/mirror task stopped.")
-
-    async def start_keyword_watch(self, channel: str, keyword: str, discord_channel: discord.TextChannel):
-        await self.stop_task()
-        self.mode = WatcherMode.KEYWORD
-        self.keyword_to_watch = keyword
-        self.target_discord_channel = discord_channel
-        self.current_channel_name = channel.lower()
-        await self.join_channels([self.current_channel_name])
-        logger.info(f"Started watching keyword '{keyword}' on Twitch channel '{channel}'.")
-
-    async def start_mirror(self, channel: str, discord_channel: discord.TextChannel):
-        await self.stop_task()
-        self.mode = WatcherMode.MIRROR
-        self.target_discord_channel = discord_channel
-        self.current_channel_name = channel.lower()
-        await self.join_channels([self.current_channel_name])
-        logger.info(f"Started mirroring Twitch chat for '{channel}'.")
-
-@bot.command(name="motcle")
-@commands.has_permissions(administrator=True)
-async def watch_keyword(ctx, streamer: str, *, keyword: str):
-    if not streamer or not keyword:
-        return await ctx.send("❌ Utilisation: `!motcle <nom_du_streamer> <mot_cle>`")
-    await bot.twitch_bot.start_keyword_watch(streamer, keyword, ctx.channel)
-    await ctx.send(f"🔍 Mot-clé `{keyword}` surveillé sur le chat de `{streamer}`. Les détections seront envoyées ici.")
-
-@bot.command(name="tchat")
-@commands.has_permissions(administrator=True)
-async def mirror_chat(ctx, streamer: str):
-    if not streamer:
-        return await ctx.send("❌ Utilisation: `!tchat <nom_du_streamer>`")
-    await bot.twitch_bot.start_mirror(streamer, ctx.channel)
-    await ctx.send(f"💬 Miroir activé sur le tchat de `{streamer}`.")
-
-@bot.command(name="stop")
-@commands.has_permissions(administrator=True)
-async def stop_watch(ctx):
-    await bot.twitch_bot.stop_task()
-    await ctx.send("🛑 Surveillance Twitch stoppée.")
-
-@bot.command(name="ping")
-async def ping(ctx):
-    await ctx.send(f"Pong! Latence : {round(bot.latency * 1000)}ms")
-
-# --- DISCORD BOT EVENTS ---
-@bot.event
-async def on_ready():
-    logger.info(f"Bot Discord connecté en tant que {bot.user} (ID: {bot.user.id})")
-    logger.info(f"Version de Discord.py : {discord.__version__}")
-    logger.info("Prêt à recevoir des commandes !")
-
-@bot.event
-async def on_command_error(ctx, error):
-    if isinstance(error, commands.MissingRequiredArgument):
-        await ctx.send(f"❌ Il manque un argument. Utilisation correcte : `{ctx.command.signature}`")
-    elif isinstance(error, commands.BadArgument):
-        await ctx.send(f"❌ Mauvais argument fourni. Vérifiez votre saisie.")
-    elif isinstance(error, commands.CommandNotFound):
-        pass
-    elif isinstance(error, commands.CheckFailure):
-        await ctx.send("🚫 Vous n'avez pas la permission d'utiliser cette commande.")
-    else:
-        logger.error(f"Erreur inattendue dans la commande {ctx.command}: {error}", exc_info=True)
-        await ctx.send(f"❌ Une erreur inattendue est survenue lors de l'exécution de la commande.")
-
-# --- MAIN EXECUTION ---
-async def main():
-    logger.info("Starting main application sequence...")
-    flask_thread = threading.Thread(target=run_flask_app)
-    flask_thread.daemon = True
-    flask_thread.start()
-    logger.info(f"Flask app for video streaming started on port {VIDEO_STREAM_PORT}")
-
-    twitch_bot = WatcherBot(bot)
-    bot.twitch_bot = twitch_bot 
-    
-    try:
-        await asyncio.gather(
-            bot.start(DISCORD_TOKEN),
-            twitch_bot.start()
-        )
-    except Exception as e:
-        logger.critical(f"One or more bots failed to start: {e}", exc_info=True)
-        sys.exit(1)
-
-if __name__ == "__main__":
-    try:
-        asyncio.run(main())
-    except KeyboardInterrupt:
-        logger.info("Bot(s) stopped by user (Ctrl+C).")
-    except Exception as e:
-        logger.critical(f"A fatal error occurred during main execution: {e}", exc_info=True)
-        sys.exit(1)
+            await ctx.send(f"❌ Impossible d'envoyer la vidéo: {http_exc}. Elle est peut-être trop lourd
