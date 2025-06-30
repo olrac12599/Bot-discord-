@@ -38,9 +38,9 @@ STOCKFISH_PATH = "/usr/games/stockfish"
 
 VIDEO_STREAM_PORT = int(os.getenv("PORT", 5000))
 
-# *** MODIFICATION CLÉ: Augmentation de la résolution pour s'assurer que tous les éléments sont visibles ***
-VIDEO_WIDTH, VIDEO_HEIGHT = 1280, 1080 # Augmenté à une résolution plus standard pour le web
-FPS = 10 # Maintenir un FPS modéré pour équilibrer les ressources
+# *** MODIFICATION CLÉ: Retour à une résolution standard 16:9 pour éviter la déformation ***
+VIDEO_WIDTH, VIDEO_HEIGHT = 1280, 720
+FPS = 10
 DISPLAY_NUM = ":99"
 
 if not all([DISCORD_TOKEN, TTV_BOT_NICKNAME, TTV_BOT_TOKEN, CHESS_USERNAME, CHESS_PASSWORD]):
@@ -101,23 +101,59 @@ async def handle_potential_blockers(page: Page, context_description: str = "") -
         'div[role="button"]:has-text("J\'accepte")'
     ]
 
-    for selector in accept_selectors:
-        locator = page.locator(selector)
-        try:
-            await locator.wait_for(state='visible', timeout=15000) 
-            await locator.wait_for(state='enabled', timeout=5000)
-
-            logger.info(f"[{context_description}] Found cookie accept button with selector '{selector}'. Clicking.")
-            await locator.click(force=True, timeout=5000)
-            await asyncio.sleep(2)
-            logger.info(f"[{context_description}] Successfully clicked cookie accept button.")
-            return True # Géré avec succès
-        except PlaywrightTimeoutError:
-            logger.debug(f"[{context_description}] Cookie accept button with selector '{selector}' not visible/enabled within timeout.")
-        except Exception as e_click:
-            logger.warning(f"[{context_description}] Error clicking cookie accept button with selector '{selector}': {e_click}")
+    # Nouvelle boucle pour tenter de trouver le bouton, avec défilement
+    for attempt in range(3): # Tentatives pour le défilement
+        for selector in accept_selectors:
+            locator = page.locator(selector)
+            try:
+                # wait_for avec un timeout généreux pour laisser apparaître le pop-up
+                await locator.wait_for(state='visible', timeout=5000) # Réduit le timeout ici car la boucle gère la persistance
+                
+                # Vérifie si le bouton est dans le viewport visible
+                bounding_box = await locator.bounding_box()
+                if bounding_box and bounding_box['y'] + bounding_box['height'] > VIDEO_HEIGHT:
+                    # Si le bouton est coupé en bas, défiler la page
+                    scroll_amount = bounding_box['y'] + bounding_box['height'] - VIDEO_HEIGHT + 50 # Défilement un peu plus bas
+                    logger.info(f"[{context_description}] Cookie button partly out of view. Scrolling down by {scroll_amount}px.")
+                    await page.evaluate(f'window.scrollBy(0, {scroll_amount})')
+                    await asyncio.sleep(1) # Laisser le temps au défilement
+                    # Tenter de nouveau après le scroll
+                    if await locator.is_visible(timeout=2000): # Re-vérifie la visibilité
+                        logger.info(f"[{context_description}] Cookie button now visible after scroll. Clicking.")
+                        await locator.click(force=True, timeout=5000)
+                        await asyncio.sleep(2)
+                        logger.info(f"[{context_description}] Successfully clicked cookie accept button.")
+                        return True
+                elif bounding_box and bounding_box['y'] < 0: # Si le bouton est coupé en haut (moins probable ici)
+                    scroll_amount = bounding_box['y'] - 50 # Défilement un peu plus haut
+                    logger.info(f"[{context_description}] Cookie button partly out of view (top). Scrolling up by {scroll_amount}px.")
+                    await page.evaluate(f'window.scrollBy(0, {scroll_amount})')
+                    await asyncio.sleep(1)
+                    if await locator.is_visible(timeout=2000):
+                        logger.info(f"[{context_description}] Cookie button now visible after scroll. Clicking.")
+                        await locator.click(force=True, timeout=5000)
+                        await asyncio.sleep(2)
+                        logger.info(f"[{context_description}] Successfully clicked cookie accept button.")
+                        return True
+                else: # Bouton visible sans scroll nécessaire
+                    logger.info(f"[{context_description}] Found cookie accept button with selector '{selector}'. Clicking.")
+                    await locator.wait_for(state='enabled', timeout=5000) # Assure qu'il est cliquable
+                    await locator.click(force=True, timeout=5000)
+                    await asyncio.sleep(2)
+                    logger.info(f"[{context_description}] Successfully clicked cookie accept button.")
+                    return True # Géré avec succès
+            except PlaywrightTimeoutError:
+                logger.debug(f"[{context_description}] Cookie accept button with selector '{selector}' not visible/enabled within timeout on attempt {attempt + 1}.")
+            except Exception as e_click:
+                logger.warning(f"[{context_description}] Error in cookie button handling for selector '{selector}' on attempt {attempt + 1}: {e_click}")
         
+        # Si aucun bouton n'a été cliqué après cette passe, attendre et réessayer
+        if not handled_any and attempt < 2: # Ne pas attendre après la dernière tentative
+            logger.info(f"[{context_description}] Cookie pop-up not handled yet. Waiting 2 seconds before next scroll attempt.")
+            await asyncio.sleep(2)
+
     # --- Stratégie 2 (Optimisée) : Gérer les pop-ups de cookies dans des IFRAMES ---
+    # Cette stratégie reste importante, même avec le scroll, si le problème est une iframe
     iframe_selectors = [
         'iframe[title*="Privacy"]', 'iframe[name*="privacy"]',
         'iframe[src*="privacy-policy"]', 'iframe[src*="cookie-consent"]',
@@ -132,23 +168,42 @@ async def handle_potential_blockers(page: Page, context_description: str = "") -
                 iframe = await iframe_element.content_frame()
                 if iframe:
                     logger.info(f"[{context_description}] Found potential iframe: '{iframe_selector}'. Checking for cookie button inside.")
-                    for selector in accept_selectors:
-                        iframe_locator = iframe.locator(selector)
-                        try:
-                            if await iframe_locator.is_visible(timeout=5000):
-                                logger.info(f"[{context_description}] Found 'I Accept' button inside iframe with selector '{selector}'. Clicking.")
-                                await iframe_locator.click(force=True, timeout=3000)
-                                await asyncio.sleep(2)
-                                logger.info(f"[{context_description}] Successfully clicked button in iframe.")
-                                return True
-                        except PlaywrightTimeoutError:
-                            pass
-                        except Exception as e_iframe_btn:
-                            logger.warning(f"[{context_description}] Error clicking button in iframe with selector '{selector}': {e_iframe_btn}")
+                    for attempt_iframe in range(2): # Tentatives de scroll dans l'iframe si le bouton est coupé
+                        for selector in accept_selectors:
+                            iframe_locator = iframe.locator(selector)
+                            try:
+                                if await iframe_locator.is_visible(timeout=2000):
+                                    # Vérifie si le bouton est coupé dans l'iframe et scrolle l'iframe
+                                    bounding_box = await iframe_locator.bounding_box()
+                                    if bounding_box and (bounding_box['y'] + bounding_box['height'] > VIDEO_HEIGHT or bounding_box['y'] < 0):
+                                        scroll_amount = bounding_box['y'] + bounding_box['height'] - VIDEO_HEIGHT + 50 if bounding_box['y'] + bounding_box['height'] > VIDEO_HEIGHT else bounding_box['y'] - 50
+                                        logger.info(f"[{context_description}] Cookie button in iframe partly out of view. Scrolling iframe by {scroll_amount}px.")
+                                        await iframe.evaluate(f'window.scrollBy(0, {scroll_amount})')
+                                        await asyncio.sleep(1)
+                                        if await iframe_locator.is_visible(timeout=2000):
+                                            logger.info(f"[{context_description}] Cookie button now visible in iframe after scroll. Clicking.")
+                                            await iframe_locator.click(force=True, timeout=3000)
+                                            await asyncio.sleep(2)
+                                            logger.info(f"[{context_description}] Successfully clicked button in iframe.")
+                                            return True
+                                    else: # Bouton visible dans l'iframe sans scroll
+                                        logger.info(f"[{context_description}] Found 'I Accept' button inside iframe with selector '{selector}'. Clicking.")
+                                        await iframe_locator.click(force=True, timeout=3000)
+                                        await asyncio.sleep(2)
+                                        logger.info(f"[{context_description}] Successfully clicked button in iframe.")
+                                        return True
+                            except PlaywrightTimeoutError:
+                                pass
+                            except Exception as e_iframe_btn:
+                                logger.warning(f"[{context_description}] Error clicking button in iframe with selector '{selector}': {e_iframe_btn}")
+                        if not handled_any and attempt_iframe < 1:
+                            logger.info(f"[{context_description}] Cookie pop-up not handled in iframe. Waiting 0.5s before next scroll attempt in iframe.")
+                            await asyncio.sleep(0.5)
         except PlaywrightTimeoutError:
             pass
         except Exception as e_iframe:
             logger.warning(f"[{context_description}] Error locating/accessing iframe {iframe_selector}: {e_iframe}")
+
 
     # --- Stratégie 3 : Gérer les pop-ups génériques de fermeture (ex: newsletters) ---
     try:
@@ -257,12 +312,10 @@ async def get_pgn_from_chess_com(url: str, username: str, password: str):
             logger.info("Launching Chromium with Playwright...")
             browser = await p.chromium.launch(headless=False, args=['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--disable-gpu', f'--display={DISPLAY_NUM}'])
             
-            # *** MODIFICATION CLÉ: Définir la résolution du Viewport ici ***
-            # Ceci est crucial pour que Playwright rende la page à la bonne taille.
             context = await browser.new_context(
                 record_video_dir=str(videos_dir),
                 record_video_size={"width": VIDEO_WIDTH, "height": VIDEO_HEIGHT},
-                viewport={"width": VIDEO_WIDTH, "height": VIDEO_HEIGHT}, # IMPORTANT
+                viewport={"width": VIDEO_WIDTH, "height": VIDEO_HEIGHT}, # IMPORTANT: Viewport size
                 base_url="https://www.chess.com"
             )
             page = await context.new_page()
