@@ -2,10 +2,13 @@ discord.py
 selenium
 opencv-python
 mss
-moviepy
+moviepy==1.0.3
 python-dotenv
 chromedriver-autoinstaller
-imageio
-imageio-ffmpeg
-decorator
-tqdm
+
+# Dépendances internes de moviepy
+imageio==2.9.0
+imageio-ffmpeg==0.4.2
+decorator==4.4.2
+tqdm==4.48.2
+numpy>=1.17
