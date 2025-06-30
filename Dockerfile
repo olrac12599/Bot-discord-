@@ -1,10 +1,10 @@
-# Utilise une image Python officielle Debian Bookworm slim
+# Base Python officielle allégée (Debian Bookworm Slim + Python 3.11)
 FROM python:3.11-slim-bookworm
 
 # Définir dossier de travail
 WORKDIR /app
 
-# Installer les dépendances système nécessaires (pour Playwright + Stockfish + ffmpeg + Xvfb)
+# 1. Installer dépendances système requises pour Playwright + FFmpeg + GUI headless
 RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     wget \
@@ -27,30 +27,43 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libpng-dev \
     libtiff-dev \
     libwebp-dev \
+    build-essential \
     stockfish \
     && rm -rf /var/lib/apt/lists/*
 
-# Installer Node.js (nécessaire pour Playwright)
+# 2. Installer Node.js (nécessaire pour Playwright)
 RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - && \
     apt-get install -y nodejs && \
     npm install -g npm@latest && \
     rm -f /etc/apt/sources.list.d/nodesource.list
 
-# Copier requirements.txt et installer les dépendances Python
+# 3. Copier et installer les dépendances Python en 2 étapes pour meilleure gestion des erreurs
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
 
-# Installer les navigateurs Playwright (Chromium)
+# Installer d'abord playwright seul
+RUN pip install --upgrade pip
+RUN pip install --no-cache-dir playwright==1.45.0
+
+# Puis stealth séparément (si intégré dans le bloc requirements ça peut fail)
+RUN pip install --no-cache-dir playwright-stealth==0.2.3
+
+# Installer les autres paquets
+RUN pip install --no-cache-dir \
+    discord.py==2.3.1 \
+    twitchio==3.4.2 \
+    python-chess==1.999
+
+# 4. Installer les navigateurs nécessaires à Playwright
 RUN playwright install chromium
 
-# Copier tout le code source
+# 5. Copier tout le code source dans le conteneur
 COPY . .
 
-# Variable d'environnement DISPLAY (pour Xvfb)
+# 6. Exporter la variable DISPLAY pour Xvfb
 ENV DISPLAY=:99
 
-# Exposer le port pour Flask si tu l'utilises (ou ignore si pas besoin)
+# 7. (Facultatif) Expose un port si besoin pour une API ou dashboard futur
 EXPOSE 5000
 
-# Commande au démarrage du conteneur
+# 8. Lancer le bot à l'exécution du conteneur
 CMD ["python", "main.py"]
