@@ -37,8 +37,10 @@ DISCORD_FILE_LIMIT_BYTES = 8 * 1024 * 1024
 STOCKFISH_PATH = "/usr/games/stockfish"
 
 VIDEO_STREAM_PORT = int(os.getenv("PORT", 5000))
-VIDEO_WIDTH, VIDEO_HEIGHT = 800, 600
-FPS = 10
+
+# *** MODIFICATION CLÉ: Augmentation de la résolution pour s'assurer que tous les éléments sont visibles ***
+VIDEO_WIDTH, VIDEO_HEIGHT = 1280, 720 # Augmenté à une résolution plus standard pour le web
+FPS = 10 # Maintenir un FPS modéré pour équilibrer les ressources
 DISPLAY_NUM = ":99"
 
 if not all([DISCORD_TOKEN, TTV_BOT_NICKNAME, TTV_BOT_TOKEN, CHESS_USERNAME, CHESS_PASSWORD]):
@@ -86,8 +88,7 @@ class ScrapingError(Exception):
 # --- SIMULACRE D'IA : OBSERVATEUR ET RÉSOLVEUR DE BLOCAGES ---
 async def handle_potential_blockers(page: Page, context_description: str = "") -> bool:
     logger.info(f"[{context_description}] AI-like blocker handler: Checking for common pop-ups...")
-    handled_any = False
-
+    
     # --- Stratégie 1 (OPTIMISÉE) : Tenter de gérer les boutons d'acceptation de cookies ---
     accept_selectors = [
         'button:has-text("I Accept")',
@@ -110,7 +111,7 @@ async def handle_potential_blockers(page: Page, context_description: str = "") -
             await locator.click(force=True, timeout=5000)
             await asyncio.sleep(2)
             logger.info(f"[{context_description}] Successfully clicked cookie accept button.")
-            return True
+            return True # Géré avec succès
         except PlaywrightTimeoutError:
             logger.debug(f"[{context_description}] Cookie accept button with selector '{selector}' not visible/enabled within timeout.")
         except Exception as e_click:
@@ -255,37 +256,41 @@ async def get_pgn_from_chess_com(url: str, username: str, password: str):
         async with stealth.use_async(async_playwright()) as p:
             logger.info("Launching Chromium with Playwright...")
             browser = await p.chromium.launch(headless=False, args=['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--disable-gpu', f'--display={DISPLAY_NUM}'])
+            
+            # *** MODIFICATION CLÉ: Définir la résolution du Viewport ici ***
+            # Ceci est crucial pour que Playwright rende la page à la bonne taille.
             context = await browser.new_context(
                 record_video_dir=str(videos_dir),
                 record_video_size={"width": VIDEO_WIDTH, "height": VIDEO_HEIGHT},
+                viewport={"width": VIDEO_WIDTH, "height": VIDEO_HEIGHT}, # IMPORTANT
                 base_url="https://www.chess.com"
             )
             page = await context.new_page()
 
             logger.info("Navigating to login page...")
-            await page.goto("/login_and_go", timeout=90000) # Timeout généreux pour le goto initial
+            await page.goto("/login_and_go", timeout=90000)
             
-            # *** MODIFICATION CLÉ: Appeler handle_potential_blockers ICI EN PREMIER ***
-            # Tenter de gérer les bloqueurs plusieurs fois juste après le chargement initial
-            # et AVANT toute interaction avec les champs de login.
-            logger.info("Checking for initial blockers immediately after page load...")
+            # Gestion des bloqueurs (cookies) juste après le chargement de la page de login
+            # ET AVANT toute interaction avec les champs de login.
+            logger.info("Checking for initial blockers immediately after page load and before login attempts...")
             initial_blocker_handled = False
-            for i in range(5): # Tenter 5 fois avec un délai entre chaque
+            for i in range(5):
                 if await handle_potential_blockers(page, f"Initial Load (Attempt {i+1})"):
                     logger.info("Initial blocker handled. Proceeding with login.")
                     initial_blocker_handled = True
                     break
-                await asyncio.sleep(2) # Attendre 2 secondes entre les tentatives
+                logger.info(f"Initial blocker still present after attempt {i+1}. Waiting 2 seconds and retrying...")
+                await asyncio.sleep(2)
             
             if not initial_blocker_handled:
-                logger.warning("No initial blocker (like 'I Accept') was handled after multiple attempts. Login might fail.")
-            # *** FIN MODIFICATION CLÉ ***
+                logger.warning("No initial blocker (like 'I Accept') was handled after multiple attempts. Proceeding with login, but it might fail.")
 
             logger.info("Attempting login...")
             login_successful = False
             for attempt in range(3):
                 logger.info(f"Login attempt {attempt + 1}...")
                 try:
+                    # Assurez-vous que les champs sont visibles et cliquables APRES la gestion des bloqueurs
                     await page.get_by_placeholder("Username, Phone, or Email").fill(username)
                     await page.get_by_placeholder("Password").fill(password)
                     login_button = page.get_by_role("button", name="Log In")
@@ -298,7 +303,6 @@ async def get_pgn_from_chess_com(url: str, username: str, password: str):
                     break
                 except PlaywrightTimeoutError as e:
                     logger.warning(f"Login attempt {attempt + 1} failed (timeout): {e}. Re-checking for blockers (may be new or persistent).")
-                    # Après un échec de login, on peut re-vérifier les bloqueurs, au cas où.
                     await handle_potential_blockers(page, f"After Login Fail (Attempt {attempt + 1})")
                     await asyncio.sleep(3)
                 except Exception as e:
@@ -311,7 +315,6 @@ async def get_pgn_from_chess_com(url: str, username: str, password: str):
             logger.info(f"Navigating to game URL: {url}")
             await page.goto(url, timeout=60000)
             await asyncio.sleep(3)
-            # Vérification des bloqueurs après le chargement de la page de jeu
             await handle_potential_blockers(page, "After Game Page Load")
 
             logger.info("Clicking share button and PGN tab...")
