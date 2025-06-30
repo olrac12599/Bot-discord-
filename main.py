@@ -11,7 +11,7 @@ import io
 from pathlib import Path
 from stockfish import Stockfish
 import chess.pgn
-import logging # Pour une meilleure gestion des logs
+import logging
 
 # Pour le streaming vidéo
 from flask import Flask, Response
@@ -20,53 +20,39 @@ import subprocess
 import numpy as np
 import threading
 import time
-import sys # Pour sys.exit()
+import sys
 
 # --- CONFIGURATION DES LOGS ---
-# Configurez le logging au début du script pour avoir des informations détaillées
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
 # --- CONFIGURATION ---
-# Assurez-vous que ces variables d'environnement sont définies sur votre système
-# ou sur la plateforme d'hébergement (ex: Railway.app).
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
 TTV_BOT_TOKEN = os.getenv("TTV_BOT_TOKEN")
 TTV_BOT_NICKNAME = os.getenv("TTV_BOT_NICKNAME")
 CHESS_USERNAME = os.getenv("CHESS_USERNAME")
 CHESS_PASSWORD = os.getenv("CHESS_PASSWORD")
-DISCORD_FILE_LIMIT_BYTES = 8 * 1024 * 1024 # Limite de taille de fichier Discord (8 Mo)
+DISCORD_FILE_LIMIT_BYTES = 8 * 1024 * 1024
 
-# Configuration pour Stockfish
-# Sur Railway, si Stockfish est installé via le Dockerfile dans /usr/games/, ce chemin est correct.
 STOCKFISH_PATH = "/usr/games/stockfish"
 
-# Configuration pour le stream vidéo
-# Railway fournira la variable PORT. Il est crucial que Flask écoute sur ce port.
 VIDEO_STREAM_PORT = int(os.getenv("PORT", 5000))
+VIDEO_WIDTH, VIDEO_HEIGHT = 800, 600
+FPS = 10
+DISPLAY_NUM = ":99"
 
-# OPTIMISATION MAJEURE: Réduction de la résolution et du FPS pour économiser les ressources.
-# C'est la cause la plus fréquente des "Aw, Snap!" sur les hébergeurs partagés.
-VIDEO_WIDTH, VIDEO_HEIGHT = 800, 600 # Résolution réduite pour économiser RAM/CPU
-FPS = 10 # Images par seconde réduites pour économiser RAM/CPU
-DISPLAY_NUM = ":99" # Numéro d'affichage virtuel pour Xvfb (nécessaire sur les serveurs headless)
-
-# Vérification des variables d'environnement critiques au démarrage
 if not all([DISCORD_TOKEN, TTV_BOT_NICKNAME, TTV_BOT_TOKEN, CHESS_USERNAME, CHESS_PASSWORD]):
     logger.error("ERREUR: Variables d'environnement DISCORD_TOKEN, TTV_BOT_NICKNAME, TTV_BOT_TOKEN, CHESS_USERNAME ou CHESS_PASSWORD manquantes.")
     logger.error("Veuillez les définir avant de lancer le bot sur Railway.")
-    sys.exit(1) # Quitte le programme si les variables sont manquantes
+    sys.exit(1)
 
 # --- FLASK APP POUR LE STREAM ---
 app = Flask(__name__)
-video_frame = None # Variable globale pour stocker la frame vidéo la plus récente
-video_lock = threading.Lock() # Verrou pour un accès thread-safe à video_frame
+video_frame = None
+video_lock = threading.Lock()
 
 @app.route('/video_feed')
 def video_feed():
-    """
-    Route Flask qui sert le flux vidéo MJPEG du navigateur Playwright.
-    """
     def generate():
         while True:
             with video_lock:
@@ -76,20 +62,13 @@ def video_feed():
                         continue
                     yield(b'--frame\r\n' b'Content-Type: image/jpeg\r\n\r\n' + bytearray(encodedImage) + b'\r\n')
             time.sleep(1/FPS)
-
     return Response(generate(), mimetype='multipart/x-mixed-replace; boundary=frame')
 
 def run_flask_app():
-    """
-    Démarre l'application Flask sur l'hôte et le port spécifiés.
-    Important pour Railway: '0.0.0.0' et le port fourni par l'environnement.
-    """
     try:
         app.run(host='0.0.0.0', port=VIDEO_STREAM_PORT, debug=False)
     except Exception as e:
         logger.critical(f"Flask application failed to start: {e}")
-        # En cas d'échec critique, on peut choisir de quitter ou de continuer sans le stream
-        # Pour un bot, il est souvent préférable de continuer sans le stream si Discord fonctionne.
 
 # --- INITIALISATION DISCORD ---
 intents = discord.Intents.default()
@@ -99,10 +78,6 @@ last_video_paths = {}
 
 # --- ERREUR CUSTOM ---
 class ScrapingError(Exception):
-    """
-    Exception personnalisée pour les erreurs de scraping, incluant
-    des données de débogage comme une capture d'écran et le chemin d'une vidéo.
-    """
     def __init__(self, message, screenshot_bytes=None, video_path=None):
         super().__init__(message)
         self.screenshot_bytes = screenshot_bytes
@@ -110,69 +85,69 @@ class ScrapingError(Exception):
 
 # --- SIMULACRE D'IA : OBSERVATEUR ET RÉSOLVEUR DE BLOCAGES ---
 async def handle_potential_blockers(page: Page, context_description: str = "") -> bool:
-    """
-    Tente de détecter et de gérer les pop-ups ou éléments bloquants courants sur une page web.
-    Cette fonction est le "cerveau" de l'auto-correction du bot pour les scénarios connus.
-    """
     logger.info(f"[{context_description}] AI-like blocker handler: Checking for common pop-ups...")
     handled_any = False
 
-    # --- Stratégie 1 : Tenter de gérer les boutons d'acceptation de cookies ---
-    accept_locators = [
-        page.get_by_text("I Accept", exact=True),
-        page.get_by_role("button", name="I Accept"),
-        page.locator('button:has-text("I Accept")'),
-        page.get_by_text("J'accepte", exact=True),
-        page.get_by_role("button", name="J'accepte"),
-        page.locator('button:has-text("J\'accepte")')
+    # --- Stratégie 1 (OPTIMISÉE) : Tenter de gérer les boutons d'acceptation de cookies ---
+    accept_selectors = [
+        'button:has-text("I Accept")',
+        'button:has-text("J\'accepte")',
+        '[aria-label="Accept"]',
+        '[aria-label="J\'accepte"]',
+        '[data-testid="accept-button"]',
+        'button[class*="accept"], .accept-button',
+        'div[role="button"]:has-text("I Accept")',
+        'div[role="button"]:has-text("J\'accepte")'
     ]
 
-    for i, locator in enumerate(accept_locators):
+    for selector in accept_selectors:
+        locator = page.locator(selector)
         try:
-            if await locator.is_visible(timeout=2000): # Check if visible quickly
-                logger.info(f"[{context_description}] 'I Accept' button found visible with strategy {i+1}. Clicking.")
-                await locator.click(force=True, timeout=3000) 
-                await asyncio.sleep(2) # Give time for popup to disappear
-                handled_any = True
-                break # Break after first successful click
-        except PlaywrightTimeoutError:
-            pass
-        except Exception as e_click:
-            logger.warning(f"[{context_description}] Error clicking 'I Accept' button with strategy {i+1}: {e_click}")
-    if handled_any: return True
+            await locator.wait_for(state='visible', timeout=15000) 
+            await locator.wait_for(state='enabled', timeout=5000)
 
-    # --- Stratégie 2 : Tenter de gérer les pop-ups de cookies dans des IFRAMES ---
+            logger.info(f"[{context_description}] Found cookie accept button with selector '{selector}'. Clicking.")
+            await locator.click(force=True, timeout=5000)
+            await asyncio.sleep(2)
+            logger.info(f"[{context_description}] Successfully clicked cookie accept button.")
+            return True
+        except PlaywrightTimeoutError:
+            logger.debug(f"[{context_description}] Cookie accept button with selector '{selector}' not visible/enabled within timeout.")
+        except Exception as e_click:
+            logger.warning(f"[{context_description}] Error clicking cookie accept button with selector '{selector}': {e_click}")
+        
+    # --- Stratégie 2 (Optimisée) : Gérer les pop-ups de cookies dans des IFRAMES ---
     iframe_selectors = [
-        'iframe[title*="Privacy"], iframe[name*="privacy"]',
-        'iframe[src*="privacy-policy"], iframe[src*="cookie-consent"]',
+        'iframe[title*="Privacy"]', 'iframe[name*="privacy"]',
+        'iframe[src*="privacy-policy"]', 'iframe[src*="cookie-consent"]',
+        'iframe[id*="sp_message_container"]',
         'iframe'
     ]
 
     for iframe_selector in iframe_selectors:
         try:
-            iframe_element = await page.wait_for_selector(iframe_selector, state='attached', timeout=2000)
+            iframe_element = await page.wait_for_selector(iframe_selector, state='attached', timeout=5000)
             if iframe_element:
                 iframe = await iframe_element.content_frame()
                 if iframe:
-                    logger.info(f"[{context_description}] Found potential iframe: {iframe_selector}. Checking for cookie button inside.")
-                    try:
-                        accept_cookies_button_in_iframe = iframe.locator('button:has-text("I Accept"), button:has-text("J\'accepte"), button[aria-label="Accept cookies"]')
-                        if await accept_cookies_button_in_iframe.is_visible(timeout=2000):
-                            logger.info(f"[{context_description}] Found 'I Accept' button inside iframe. Clicking.")
-                            await accept_cookies_button_in_iframe.click(force=True)
-                            await asyncio.sleep(2)
-                            handled_any = True
-                            break
-                    except PlaywrightTimeoutError:
-                        pass
-                    except Exception as e_iframe_btn:
-                        logger.warning(f"[{context_description}] Error clicking button in iframe: {e_iframe_btn}")
+                    logger.info(f"[{context_description}] Found potential iframe: '{iframe_selector}'. Checking for cookie button inside.")
+                    for selector in accept_selectors:
+                        iframe_locator = iframe.locator(selector)
+                        try:
+                            if await iframe_locator.is_visible(timeout=5000):
+                                logger.info(f"[{context_description}] Found 'I Accept' button inside iframe with selector '{selector}'. Clicking.")
+                                await iframe_locator.click(force=True, timeout=3000)
+                                await asyncio.sleep(2)
+                                logger.info(f"[{context_description}] Successfully clicked button in iframe.")
+                                return True
+                        except PlaywrightTimeoutError:
+                            pass
+                        except Exception as e_iframe_btn:
+                            logger.warning(f"[{context_description}] Error clicking button in iframe with selector '{selector}': {e_iframe_btn}")
         except PlaywrightTimeoutError:
             pass
         except Exception as e_iframe:
             logger.warning(f"[{context_description}] Error locating/accessing iframe {iframe_selector}: {e_iframe}")
-    if handled_any: return True
-
 
     # --- Stratégie 3 : Gérer les pop-ups génériques de fermeture (ex: newsletters) ---
     try:
@@ -181,13 +156,11 @@ async def handle_potential_blockers(page: Page, context_description: str = "") -
             logger.info(f"[{context_description}] Found generic pop-up. Clicking close/dismiss button.")
             await close_button.click(force=True)
             await asyncio.sleep(1)
-            handled_any = True
+            return True
     except PlaywrightTimeoutError:
         pass
     except Exception as e:
         logger.warning(f"[{context_description}] Error handling generic pop-up: {e}")
-    if handled_any: return True
-
 
     # --- Stratégie 4 : Vérifications spécifiques à Chess.com ---
     try:
@@ -196,32 +169,26 @@ async def handle_potential_blockers(page: Page, context_description: str = "") -
             logger.info(f"[{context_description}] Found Chess.com specific welcome/feature pop-up. Closing it.")
             await welcome_modal_close.click(force=True)
             await asyncio.sleep(1)
-            handled_any = True
+            return True
     except PlaywrightTimeoutError:
         pass
     except Exception as e:
         logger.warning(f"[{context_description}] Error handling Chess.com specific pop-up: {e}")
-    if handled_any: return True
 
     # --- Stratégie 5 : Gérer le message "Aw, Snap!" (priorité: Reload puis Learn more) ---
-    # Cette logique est tentée EN DERNIER car un "Aw, Snap!" indique un crash potentiel
-    # et une récupération est moins probable que de simples popups.
     try:
         reload_button = page.get_by_role("button", name="Reload", exact=True)
         learn_more_link = page.get_by_text("Learn more", exact=True)
 
-        if await reload_button.is_visible(timeout=1500): # Timeout légèrement réduit
+        if await reload_button.is_visible(timeout=1500):
             logger.warning(f"[{context_description}] Detected 'Aw, Snap!' with 'Reload' button. Attempting to click Reload.")
             try:
                 await reload_button.click(timeout=1000)
-                await asyncio.sleep(5) # Laisser le temps à la page de recharger
-                # Après un rechargement, il est ESSENTIEL de retenter de gérer d'autres blockers
-                # ou de vérifier l'état de la page. Ici, on appelle à nouveau la fonction.
+                await asyncio.sleep(5)
                 await handle_potential_blockers(page, f"{context_description} after 'Reload' attempt")
                 return True
             except Exception as reload_e:
                 logger.error(f"[{context_description}] Failed to click 'Reload' or subsequent handling failed: {reload_e}")
-                # Si le reload échoue, on pourrait alors essayer learn more
                 if await learn_more_link.is_visible(timeout=1000):
                     logger.warning(f"[{context_description}] 'Reload' failed, trying 'Learn more' link.")
                     await learn_more_link.click(timeout=1000)
@@ -242,47 +209,39 @@ async def handle_potential_blockers(page: Page, context_description: str = "") -
 
 # --- PGN SCRAPER AVEC STREAMING ---
 async def get_pgn_from_chess_com(url: str, username: str, password: str):
-    """
-    Se connecte à Chess.com, gère les cookies/pop-ups, navigue vers l'URL du jeu,
-    extrait le PGN et diffuse l'activité du navigateur en temps réel.
-    """
     videos_dir = Path("debug_videos")
     videos_dir.mkdir(exist_ok=True)
     
     xvfb_process = None
     ffmpeg_process = None
+    browser = None
+    context = None
+    page = None
+
     try:
         logger.info(f"Starting Xvfb on display {DISPLAY_NUM}...")
         xvfb_command = ['Xvfb', DISPLAY_NUM, '-screen', '0', f'{VIDEO_WIDTH}x{VIDEO_HEIGHT}x24', '+extension', 'GLX', '+render', '-noreset']
         xvfb_process = subprocess.Popen(xvfb_command, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        await asyncio.sleep(2) # Give Xvfb time to start
+        await asyncio.sleep(2)
         logger.info("Xvfb started successfully.")
 
         logger.info("Starting FFmpeg to capture Xvfb display...")
         ffmpeg_command = [
-            'ffmpeg',
-            '-f', 'x11grab',                 # Input format: X11 capture
-            '-video_size', f'{VIDEO_WIDTH}x{VIDEO_HEIGHT}', # Capture resolution
-            '-i', f'{DISPLAY_NUM}.0',        # Input: Xvfb virtual display
-            '-c:v', 'rawvideo',              # Raw video output
-            '-pix_fmt', 'bgr24',             # BGR pixel format (OpenCV compatible)
-            '-f', 'image2pipe',              # Output to pipe
-            '-vsync', '2',                   # Video sync control
-            '-r', str(FPS),                  # Capture frame rate
-            'pipe:1'                         # Output to stdout
+            'ffmpeg', '-f', 'x11grab', '-video_size', f'{VIDEO_WIDTH}x{VIDEO_HEIGHT}',
+            '-i', f'{DISPLAY_NUM}.0', '-c:v', 'rawvideo', '-pix_fmt', 'bgr24',
+            '-f', 'image2pipe', '-vsync', '2', '-r', str(FPS), 'pipe:1'
         ]
         ffmpeg_process = subprocess.Popen(ffmpeg_command, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
         logger.info("FFmpeg capture process started.")
 
         def read_ffmpeg_output():
             global video_frame 
-            bytes_per_frame = VIDEO_WIDTH * VIDEO_HEIGHT * 3
+            bytes_per_frame = VIDEO_WIDTH * VIDEO_HEIGHT * 3 
             while True:
                 in_bytes = ffmpeg_process.stdout.read(bytes_per_frame)
                 if not in_bytes:
                     logger.warning("FFmpeg output stream ended or encountered an error.")
                     break
-                
                 frame = np.frombuffer(in_bytes, np.uint8).reshape((VIDEO_HEIGHT, VIDEO_WIDTH, 3))
                 with video_lock:
                     video_frame = frame
@@ -292,23 +251,10 @@ async def get_pgn_from_chess_com(url: str, username: str, password: str):
         ffmpeg_thread.start()
         logger.info("FFmpeg frame reader thread started.")
 
-    except Exception as e:
-        logger.critical(f"ERREUR: Échec du démarrage de Xvfb/FFmpeg: {e}. Assurez-vous qu'ils sont installés sur votre serveur.")
-        if xvfb_process and xvfb_process.poll() is None: xvfb_process.terminate()
-        if ffmpeg_process and ffmpeg_process.poll() is None: ffmpeg_process.terminate()
-        raise ScrapingError(f"Failed to start Xvfb/FFmpeg: {e}")
-
-    stealth = Stealth()
-    browser = None
-    context = None
-    page = None
-    try:
-        # 3. Lancer Playwright en mode non-headless, en utilisant l'affichage virtuel de Xvfb
-        browser_args = ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--disable-gpu', f'--display={DISPLAY_NUM}']
-
+        stealth = Stealth()
         async with stealth.use_async(async_playwright()) as p:
             logger.info("Launching Chromium with Playwright...")
-            browser = await p.chromium.launch(headless=False, args=browser_args)
+            browser = await p.chromium.launch(headless=False, args=['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--disable-gpu', f'--display={DISPLAY_NUM}'])
             context = await browser.new_context(
                 record_video_dir=str(videos_dir),
                 record_video_size={"width": VIDEO_WIDTH, "height": VIDEO_HEIGHT},
@@ -317,66 +263,86 @@ async def get_pgn_from_chess_com(url: str, username: str, password: str):
             page = await context.new_page()
 
             logger.info("Navigating to login page...")
-            await page.goto("/login_and_go", timeout=60000) # Reduced timeout for goto
-            await asyncio.sleep(2)
-            await handle_potential_blockers(page, "Before Login Attempt")
-            await asyncio.sleep(2)
+            await page.goto("/login_and_go", timeout=90000) # Timeout généreux pour le goto initial
+            
+            # *** MODIFICATION CLÉ: Appeler handle_potential_blockers ICI EN PREMIER ***
+            # Tenter de gérer les bloqueurs plusieurs fois juste après le chargement initial
+            # et AVANT toute interaction avec les champs de login.
+            logger.info("Checking for initial blockers immediately after page load...")
+            initial_blocker_handled = False
+            for i in range(5): # Tenter 5 fois avec un délai entre chaque
+                if await handle_potential_blockers(page, f"Initial Load (Attempt {i+1})"):
+                    logger.info("Initial blocker handled. Proceeding with login.")
+                    initial_blocker_handled = True
+                    break
+                await asyncio.sleep(2) # Attendre 2 secondes entre les tentatives
+            
+            if not initial_blocker_handled:
+                logger.warning("No initial blocker (like 'I Accept') was handled after multiple attempts. Login might fail.")
+            # *** FIN MODIFICATION CLÉ ***
 
-            logger.info("Waiting 5 seconds before login action...")
-            await asyncio.sleep(5)
-
+            logger.info("Attempting login...")
             login_successful = False
-            for attempt in range(3): # Attempt login multiple times
+            for attempt in range(3):
                 logger.info(f"Login attempt {attempt + 1}...")
                 try:
                     await page.get_by_placeholder("Username, Phone, or Email").fill(username)
                     await page.get_by_placeholder("Password").fill(password)
-                    await page.get_by_role("button", name="Log In").click()
+                    login_button = page.get_by_role("button", name="Log In")
+                    await login_button.wait_for(state='visible', timeout=10000)
+                    await login_button.click()
                     
-                    await page.wait_for_url("**/home", timeout=15000) # Wait for redirect
+                    await page.wait_for_url("**/home", timeout=20000)
                     logger.info("Login successful.")
                     login_successful = True
                     break
                 except PlaywrightTimeoutError as e:
-                    logger.warning(f"Login attempt {attempt + 1} failed (timeout): {e}. Checking for blockers...")
-                    blocker_handled = await handle_potential_blockers(page, f"After Login Fail (Attempt {attempt + 1})")
-                    if not blocker_handled:
-                        logger.info(f"No known blocker handled after failed login attempt {attempt + 1}. Retrying...")
+                    logger.warning(f"Login attempt {attempt + 1} failed (timeout): {e}. Re-checking for blockers (may be new or persistent).")
+                    # Après un échec de login, on peut re-vérifier les bloqueurs, au cas où.
+                    await handle_potential_blockers(page, f"After Login Fail (Attempt {attempt + 1})")
                     await asyncio.sleep(3)
                 except Exception as e:
-                    logger.error(f"An unexpected error occurred during login attempt {attempt + 1}: {e}. Retrying...")
+                    logger.error(f"An unexpected error occurred during login attempt {attempt + 1}: {e}. Retrying...", exc_info=True)
                     await asyncio.sleep(3)
 
             if not login_successful:
                 raise ScrapingError("Failed to log in to Chess.com after multiple attempts.")
 
             logger.info(f"Navigating to game URL: {url}")
-            await page.goto(url, timeout=60000) # Reduced timeout for goto
+            await page.goto(url, timeout=60000)
+            await asyncio.sleep(3)
+            # Vérification des bloqueurs après le chargement de la page de jeu
             await handle_potential_blockers(page, "After Game Page Load")
 
             logger.info("Clicking share button and PGN tab...")
-            await page.locator("button.share-button-component").click(timeout=10000)
-            await page.locator('div.share-menu-tab-component-header:has-text("PGN")').click(timeout=10000)
+            share_button = page.locator("button.share-button-component")
+            await share_button.wait_for(state='visible', timeout=15000)
+            await share_button.click()
+
+            pgn_tab = page.locator('div.share-menu-tab-component-header:has-text("PGN")')
+            await pgn_tab.wait_for(state='visible', timeout=10000)
+            await pgn_tab.click()
 
             logger.info("Extracting PGN text...")
-            pgn_text = await page.input_value('textarea.share-menu-tab-pgn-textarea', timeout=10000)
+            pgn_textarea = page.locator('textarea.share-menu-tab-pgn-textarea')
+            await pgn_textarea.wait_for(state='visible', timeout=10000)
+            pgn_text = await pgn_textarea.input_value()
             logger.info("PGN extracted.")
 
-            video_path = await page.video.path() # Retrieve locally recorded video path
+            video_path = await context.video.path()
             return pgn_text, video_path
 
     except Exception as e:
         screenshot_bytes, video_path = None, None
         try:
-            if page and not page.is_closed(): # Check if page object exists and is not closed
+            if page and not page.is_closed():
                 logger.error(f"Scraping error: {e}. Attempting to capture debug info.")
                 screenshot_bytes = await page.screenshot(full_page=True)
-            if context: # Check if context object exists
-                video_path = await context.video.path() # Get video path from context
+            if context:
+                video_path = await context.video.path()
         except Exception as debug_e:
             logger.error(f"Error during debug data collection: {debug_e}")
         finally:
-            # Enhanced cleanup: Ensure all browser-related processes are closed
             if browser:
                 try:
                     await browser.close()
@@ -384,7 +350,6 @@ async def get_pgn_from_chess_com(url: str, username: str, password: str):
                 except Exception as close_e:
                     logger.error(f"Error closing Playwright browser: {close_e}")
             
-            # Ensure FFmpeg and Xvfb processes are terminated
             if ffmpeg_process and ffmpeg_process.poll() is None:
                 logger.info("Terminating FFmpeg process...")
                 ffmpeg_process.terminate()
@@ -398,7 +363,6 @@ async def get_pgn_from_chess_com(url: str, username: str, password: str):
         raise ScrapingError(f"Scraping failed: {e}", screenshot_bytes, video_path)
 
     finally:
-        # Final cleanup for FFmpeg and Xvfb even if no Playwright error
         if ffmpeg_process and ffmpeg_process.poll() is None:
             logger.info("Final cleanup: Terminating FFmpeg process...")
             ffmpeg_process.terminate()
@@ -411,10 +375,6 @@ async def get_pgn_from_chess_com(url: str, username: str, password: str):
 
 # --- STOCKFISH ANALYSE (INCHANGÉ) ---
 def analyse_pgn_with_stockfish(pgn_text):
-    """
-    Analyse un PGN de partie d'échecs en utilisant Stockfish
-    et retourne des annotations sur les coups.
-    """
     try:
         stockfish = Stockfish(path=STOCKFISH_PATH)
     except FileNotFoundError:
@@ -471,10 +431,6 @@ def analyse_pgn_with_stockfish(pgn_text):
 # --- DISCORD COMMANDES ---
 @bot.command(name="chess")
 async def get_chess_pgn(ctx, url: str):
-    """
-    Commande Discord pour récupérer le PGN d'une partie Chess.com,
-    l'analyser, et activer un live stream du processus du bot.
-    """
     if "chess.com/game/live/" not in url and "chess.com/play/game/" not in url:
         return await ctx.send("❌ URL invalide. Veuillez fournir une URL de partie Chess.com valide.")
     
@@ -528,10 +484,6 @@ async def get_chess_pgn(ctx, url: str):
 
 @bot.command(name="cam")
 async def send_last_video(ctx):
-    """
-    Commande Discord pour envoyer la dernière vidéo de débogage enregistrée.
-    Utile si le stream en direct a échoué ou pour revoir une session.
-    """
     video_path = last_video_paths.get(ctx.channel.id)
     if not video_path:
         return await ctx.send("❌ Aucune vidéo de débogage trouvée pour ce canal. Exécutez `!chess` d'abord.")
@@ -558,9 +510,6 @@ class WatcherMode(Enum):
     MIRROR = auto()
 
 class WatcherBot(twitch_commands.Bot):
-    """
-    Bot Twitch pour surveiller ou mirroirer un chat.
-    """
     def __init__(self, discord_bot):
         super().__init__(token=TTV_BOT_TOKEN, prefix="!", initial_channels=[])
         self.discord_bot = discord_bot
@@ -665,17 +614,14 @@ async def on_command_error(ctx, error):
 # --- EXÉCUTION PRINCIPALE ---
 async def main():
     logger.info("Starting main application sequence...")
-    # 1. Démarrer l'application Flask dans un thread séparé
     flask_thread = threading.Thread(target=run_flask_app)
     flask_thread.daemon = True
     flask_thread.start()
     logger.info(f"Flask app for video streaming started on port {VIDEO_STREAM_PORT}")
 
-    # 2. Initialiser le bot Twitch et l'attacher au bot Discord
     twitch_bot = WatcherBot(bot)
     bot.twitch_bot = twitch_bot 
     
-    # 3. Lancer les bots Discord et Twitch de manière asynchrone
     try:
         await asyncio.gather(
             bot.start(DISCORD_TOKEN),
@@ -683,7 +629,7 @@ async def main():
         )
     except Exception as e:
         logger.critical(f"One or more bots failed to start: {e}", exc_info=True)
-        sys.exit(1) # Quitte le programme si les bots ne peuvent pas démarrer
+        sys.exit(1)
 
 if __name__ == "__main__":
     try:
@@ -692,5 +638,4 @@ if __name__ == "__main__":
         logger.info("Bot(s) stopped by user (Ctrl+C).")
     except Exception as e:
         logger.critical(f"A fatal error occurred during main execution: {e}", exc_info=True)
-        sys.exit(1) # Quitter avec un code d'erreur en cas d'erreur fatale
-
+        sys.exit(1)
