@@ -246,9 +246,12 @@ async def get_pgn_from_chess_com(url: str, username: str, password: str) -> tupl
                 headless=True, # Set to False for visual debugging if needed (requires X server access)
                 args=['--no-sandbox', '--disable-setuid-sandbox'] # Essential for many Linux environments (e.g., Docker)
             )
+            # --- CORRECTION APPLIQUÉE ICI ---
+            # Supprimé 'timeout' de new_context()
             context = await browser.new_context(
-                # Increase default timeout for actions, navigations, etc.
-                timeout=90000, # Increased timeout to 90 seconds
+                # Increase default timeout for actions, navigations, etc. (This setting applies to individual operations not context)
+                # default_navigation_timeout=90000, # If your Playwright version supports this
+                # default_timeout=90000, # If your Playwright version supports this
                 # Add a user-agent to mimic a real browser more closely
                 user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
             )
@@ -471,24 +474,24 @@ async def main():
     # CHESS_PASSWORD = "your_password"
 
     if CHESS_USERNAME == "your_chess_username" or CHESS_PASSWORD == "your_chess_password":
-        logger.error("Please set CHESS_USERNAME and CHESS_PASSWORD environment variables or update the script.")
+        logger.error("Veuillez définir les variables d'environnement CHESS_USERNAME et CHESS_PASSWORD ou mettre à jour le script.")
         return
 
     try:
         pgn_data, video_output_path = await get_pgn_from_chess_com(test_url, CHESS_USERNAME, CHESS_PASSWORD)
-        logger.info(f"Successfully scraped PGN:\n{pgn_data[:500]}...") # Print first 500 chars
-        logger.info(f"Video recorded to: {video_output_path}")
+        logger.info(f"PGN récupéré avec succès :\n{pgn_data[:500]}...") # Print first 500 chars
+        logger.info(f"Vidéo enregistrée dans : {video_output_path}")
     except ScrapingError as e:
-        logger.error(f"Scraping operation failed: {e}")
+        logger.error(f"L'opération de scraping a échoué : {e}")
         if e.screenshot_bytes:
             screenshot_filename = "debug_screenshot.png"
             with open(screenshot_filename, "wb") as f:
                 f.write(e.screenshot_bytes)
-            logger.error(f"Debug screenshot saved to {screenshot_filename}")
+            logger.error(f"Capture d'écran de débogage sauvegardée dans {screenshot_filename}")
         if e.video_path:
-            logger.error(f"Recorded video path: {e.video_path}")
+            logger.error(f"Chemin de la vidéo enregistrée : {e.video_path}")
     except Exception as e:
-        logger.error(f"An unexpected error occurred in main: {e}")
+        logger.error(f"Une erreur inattendue s'est produite dans la fonction principale : {e}")
 
 if __name__ == "__main__":
     asyncio.run(main())
