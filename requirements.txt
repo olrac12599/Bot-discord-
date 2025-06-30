@@ -9,3 +9,4 @@ mss
 moviepy
 chromedriver-autoinstaller
 python-dotenv
+selenium
