@@ -1,4 +1,3 @@
-
 # --- IMPORTS ---
 import discord
 from discord.ext import commands
@@ -559,7 +558,6 @@ class WatcherBot(twitch_commands.Bot):
         self.keyword_to_watch = keyword
         self.target_discord_channel = discord_channel
         self.current_channel_name = channel.lower()
-        print(f"Joining Twitch channel {self.current_channel_name} for keyword '{keyword}' watch.")
         await self.join_channels([self.current_channel_name])
 
     async def start_mirror(self, channel: str, discord_channel: discord.TextChannel):
@@ -568,7 +566,6 @@ class WatcherBot(twitch_commands.Bot):
         self.mode = WatcherMode.MIRROR
         self.target_discord_channel = discord_channel
         self.current_channel_name = channel.lower()
-        print(f"Joining Twitch channel {self.current_channel_name} for chat mirror.")
         await self.join_channels([self.current_channel_name])
 
 @bot.command(name="motcle")
