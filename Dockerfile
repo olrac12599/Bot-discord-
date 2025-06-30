@@ -38,16 +38,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     # Nettoie le cache APT pour réduire la taille de l'image Docker finale
     && rm -rf /var/lib/apt/lists/*
 
-# Étape 2 : Installer Node.js (requis par Playwright pour certains outils et l'installation des navigateurs)
-# Utilise la méthode recommandée par NodeSource pour les images Debian, plus robuste en conteneur.
+# Étape 2 : Installer Node.js (requis par Playwright)
+# Méthode simplifiée et plus robuste pour les images slim-bookworm.
+# Elle utilise le script d'installation de NodeSource via curl et bash.
 # Nous utiliserons Node.js 20.x, qui est une version LTS (support à long terme).
-RUN mkdir -p /etc/apt/keyrings && \
-    curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.d/nodesource.gpg | gpg --dearmor -o /etc/apt/keyrings/nodesource.gpg && \
-    echo "deb [signed-by=/etc/apt/keyrings/nodesource.gpg] https://deb.nodesource.com/node_20.x nodistro main" | tee /etc/apt/sources.list.d/nodesource.list && \
-    apt-get update && \
+RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - && \
     apt-get install -y nodejs && \
     npm install -g npm@latest && \
-    rm -rf /etc/apt/sources.list.d/nodesource.list # Nettoyage après l'installation
+    rm -f /etc/apt/sources.list.d/nodesource.list # Nettoyage après l'installation
 
 # Étape 3 : Installer Playwright Python et les navigateurs (Chromium).
 # Copie requirements.txt AVANT d'installer Playwright et les dépendances pour la mise en cache de Docker.
