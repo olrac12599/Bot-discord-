@@ -23,57 +23,66 @@ intents.message_content = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 
 
-# --- NOUVELLE FONCTION DE SCRAPING CHESS.COM ---
+# --- NOUVELLE FONCTION DE SCRAPING CHESS.COM (VERSION AMÉLIORÉE) ---
 async def get_pgn_from_chess_com(url: str) -> str:
     """
-    Utilise Playwright pour lancer un navigateur, aller sur une URL de partie Chess.com,
-    et extraire le PGN via les boutons de la page.
-    ATTENTION : Très fragile. Cassera si Chess.com change son site.
+    Version améliorée qui tente de gérer les pop-ups et utilise des timeouts plus longs.
     """
     async with async_playwright() as p:
-        browser = await p.chromium.launch()
+        # On utilise Firefox, qui est parfois plus discret
+        browser = await p.firefox.launch(headless=True)
         page = await browser.new_page()
         try:
-            # Naviguer vers l'URL de la partie
-            await page.goto(url, timeout=60000)
+            # 1. Naviguer vers l'URL avec un long timeout
+            await page.goto(url, timeout=90000, wait_until='domcontentloaded')
 
-            # Tenter de fermer la fenêtre de "consentement aux cookies" si elle existe
+            # 2. GESTION DES POP-UPS (on essaie de fermer tout ce qui peut gêner)
+            # On attend un peu que les pop-ups apparaissent
+            await page.wait_for_timeout(3000) 
+
+            # Tentative de fermeture de la bannière de cookies
             try:
-                # Ce sélecteur cible le bouton "Accepter" ou similaire. Il devra peut-être être ajusté.
-                await page.click('button[aria-label="Consent"], button:has-text("Agree")', timeout=5000)
+                cookie_button_selector = 'button[aria-label="Consent"], button:has-text("Agree"), button:has-text("Accept")'
+                await page.click(cookie_button_selector, timeout=5000)
+                print("Bannière de cookies fermée.")
             except PlaywrightTimeoutError:
-                # Le bouton n'était pas là, on continue
-                print("Pas de bannière de cookies détectée ou déjà acceptée.")
+                print("Pas de bannière de cookies détectée.")
 
+            # Tentative de fermeture d'autres modales (pubs, inscription...)
+            try:
+                close_button_selector = 'div[class*="modal"] button[class*="close"], [aria-label*="Close"], [class*="icon-font-chess x"]'
+                await page.click(close_button_selector, timeout=5000)
+                print("Fenêtre modale fermée.")
+            except PlaywrightTimeoutError:
+                print("Pas de fenêtre modale détectée.")
+
+            # 3. ACTION PRINCIPALE
             # Cliquer sur l'icône de partage
-            # Le sélecteur cible le bouton avec une classe "share-menu-icon". C'est fragile.
             share_button_selector = ".icon-font-chess.share"
-            await page.wait_for_selector(share_button_selector, timeout=15000)
+            await page.wait_for_selector(share_button_selector, timeout=30000)
             await page.click(share_button_selector)
 
-            # Cliquer sur l'onglet PGN dans le menu qui vient de s'ouvrir
-            # Le sélecteur cible un onglet qui contient le texte "PGN"
+            # Cliquer sur l'onglet PGN
             pgn_tab_selector = 'div.share-menu-tab-component-header:has-text("PGN")'
-            await page.wait_for_selector(pgn_tab_selector, timeout=10000)
+            await page.wait_for_selector(pgn_tab_selector, timeout=20000)
             await page.click(pgn_tab_selector)
             
             # Récupérer le contenu du PGN
-            # Le sélecteur cible la zone de texte contenant le PGN
             pgn_content_selector = 'textarea.share-menu-tab-pgn-textarea'
-            await page.wait_for_selector(pgn_content_selector, timeout=10000)
+            await page.wait_for_selector(pgn_content_selector, timeout=20000)
             pgn_text = await page.input_value(pgn_content_selector)
             
             await browser.close()
             return pgn_text
 
-        except PlaywrightTimeoutError as e:
-            await browser.close()
-            print(f"Erreur de timeout pendant le scraping : {e}")
-            raise RuntimeError("Impossible de trouver un élément sur la page (le site a peut-être changé) ou la page est trop lente à charger.")
         except Exception as e:
+            # Le filet de sécurité : prendre une capture d'écran pour voir ce qui n'a pas marché
+            screenshot_path = "debug_screenshot.png"
+            await page.screenshot(path=screenshot_path)
+            print(f"ERREUR: Capture d'écran de débogage sauvegardée dans '{screenshot_path}'")
             await browser.close()
-            print(f"Erreur inattendue pendant le scraping : {e}")
-            raise RuntimeError(f"Une erreur inattendue est survenue : {e}")
+            # On propage l'erreur pour que l'utilisateur Discord soit notifié
+            raise RuntimeError(f"Impossible de trouver un élément sur la page (le site a peut-être changé) ou la page est trop lente à charger. Une capture d'écran de débug a été tentée.")
 
 # --- CLASSE BOT TWITCH (INCHANGÉE) ---
 
@@ -83,6 +92,7 @@ class WatcherMode(Enum):
     MIRROR = auto()
 
 class WatcherBot(twitch_commands.Bot):
+    # ... (Le code de la classe WatcherBot reste identique)
     def __init__(self, discord_bot_instance):
         super().__init__(token=TTV_BOT_TOKEN, prefix='!', initial_channels=[])
         self.discord_bot = discord_bot_instance
@@ -135,6 +145,7 @@ class WatcherBot(twitch_commands.Bot):
             msg = f"**{message.author.name}**: {message.content}"
             await self.target_discord_channel.send(msg[:2000])
 
+
 # --- COMMANDES DISCORD ---
 
 @bot.command(name="chess")
@@ -143,7 +154,7 @@ async def get_chess_pgn(ctx, url: str):
         await ctx.send("❌ URL invalide. Veuillez fournir une URL de partie live de Chess.com.")
         return
     
-    msg = await ctx.send("🌐 Lancement du navigateur et récupération du PGN en cours... (peut prendre jusqu'à 1 minute)")
+    msg = await ctx.send("🌐 Lancement du navigateur et récupération du PGN en cours... (peut prendre jusqu'à 2 minutes)")
     try:
         pgn = await get_pgn_from_chess_com(url)
         # Discord a une limite de 2000 caractères par message
@@ -156,6 +167,7 @@ async def get_chess_pgn(ctx, url: str):
     except Exception as e:
         await msg.edit(content=f"❌ Erreur lors de la récupération du PGN : {e}")
 
+# ... (Les autres commandes Discord restent identiques)
 @bot.command(name="motcle")
 @commands.has_permissions(administrator=True)
 async def watch_keyword(ctx, streamer: str, *, keyword: str):
@@ -181,6 +193,7 @@ async def stop_twitch_watch(ctx):
 async def ping(ctx):
     await ctx.send("Pong!")
 
+
 # --- ÉVÉNEMENTS ---
 @bot.event
 async def on_ready():
@@ -200,3 +213,4 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+
