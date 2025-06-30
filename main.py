@@ -243,7 +243,8 @@ async def get_pgn_from_chess_com(url: str, username: str, password: str):
 
         # Thread pour lire les frames de FFmpeg et les mettre à jour pour le stream Flask
         def read_ffmpeg_output():
-            nonlocal video_frame # Permet de modifier la variable video_frame du scope parent
+            # CORRECTION DE LA LIGNE 246 : Utilisation de 'global' au lieu de 'nonlocal'
+            global video_frame 
             bytes_per_frame = VIDEO_WIDTH * VIDEO_HEIGHT * 3 # 3 bytes per pixel for bgr24
             while True:
                 # Lire la quantité de bytes correspondant à une frame complète
