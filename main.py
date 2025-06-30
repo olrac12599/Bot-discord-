@@ -33,16 +33,16 @@ streamer_id_cache = {}
 # --- FONCTIONS UTILES ---
 
 def get_live_game_moves(game_id):
-    url = f"https://www.chess.com/game/live/{game_id}"
-    headers = {"User-Agent": "Mozilla/5.0"}
-    r = requests.get(url, headers=headers, timeout=5)
-    if r.status_code != 200:
-        raise RuntimeError(f"Erreur HTTP {r.status_code} lors de la récupération.")
-    text = r.text
-    match = re.search(r'"moves":"([^"]+)"', text)
-    if not match:
+    url = f"https://api.chess.com/pub/game/live/{game_id}"
+    r = requests.get(url, timeout=5)
+    r.raise_for_status()
+    data = r.json()
+    print(f"DEBUG data received: {data}")  # <-- Ajoute cette ligne
+    if data.get("status") != "started":
+        raise RuntimeError("La partie est terminée ou indisponible.")
+    moves_str = data.get("moves", "")
+    if not moves_str:
         raise RuntimeError("Impossible de trouver les coups dans la page.")
-    moves_str = match.group(1)
     moves = moves_str.split()
     return moves
 
