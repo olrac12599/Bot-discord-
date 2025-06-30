@@ -2,3 +2,5 @@ discord.py
 twitchio
 requests
 chess
+chess.com
+Chess.com
