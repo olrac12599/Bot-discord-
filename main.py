@@ -5,7 +5,6 @@ from twitchio.ext import commands as twitch_commands
 import os
 import asyncio
 from enum import Enum, auto
-# Importation de l'erreur Timeout de Playwright
 from playwright.async_api import async_playwright, TimeoutError as PlaywrightTimeoutError
 import io
 from PIL import Image
@@ -18,7 +17,7 @@ TTV_BOT_NICKNAME = os.getenv("TTV_BOT_NICKNAME")
 TTV_BOT_TOKEN = os.getenv("TTV_BOT_TOKEN")
 CHESS_USERNAME = os.getenv("CHESS_USERNAME")
 CHESS_PASSWORD = os.getenv("CHESS_PASSWORD")
-DISCORD_FILE_LIMIT_BYTES = 8 * 1024 * 1024 # Limite de 8 Mo pour Discord sans Nitro
+DISCORD_FILE_LIMIT_BYTES = 8 * 1024 * 1024
 
 if not all([DISCORD_TOKEN, TWITCH_CLIENT_ID, TWITCH_TOKEN, TTV_BOT_NICKNAME, TTV_BOT_TOKEN]):
     raise ValueError("ERREUR CRITIQUE: Variables d'environnement Twitch/Discord manquantes.")
@@ -33,16 +32,15 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 
 # --- EXCEPTION PERSONNALISÉE ---
 class ScrapingError(Exception):
-    """Exception personnalisée pour les erreurs de scraping, contenant la capture d'écran."""
     def __init__(self, message, screenshot_bytes=None):
         super().__init__(message)
         self.screenshot_bytes = screenshot_bytes
 
 
-# --- FONCTION DE SCRAPING MODIFIÉE AVEC GESTION DES COOKIES ---
+# --- FONCTION DE SCRAPING ENCORE AMÉLIORÉE ---
 async def get_pgn_from_chess_com(url: str, username: str, password: str) -> str:
     """
-    Accepte les cookies, se connecte, et récupère le PGN.
+    Utilise une méthode de sélection robuste ("get_by_label") pour la connexion.
     """
     async with async_playwright() as p:
         browser = await p.firefox.launch(headless=True)
@@ -51,34 +49,31 @@ async def get_pgn_from_chess_com(url: str, username: str, password: str) -> str:
             print("Navigation vers la page de connexion...")
             await page.goto("https://www.chess.com/login_and_go", timeout=90000)
             
-            # --- NOUVELLE ÉTAPE : GESTION DE LA BANNIÈRE DE COOKIES ---
             try:
                 print("Vérification de la présence de la bannière de cookies...")
-                # On utilise un sélecteur robuste qui cible le bouton par son rôle et son nom
-                # On lui laisse un temps raisonnable pour apparaître (ex: 10 secondes)
                 accept_button = page.get_by_role("button", name="I Accept")
                 await accept_button.wait_for(state="visible", timeout=10000)
                 print("Bannière trouvée. Clic sur 'I Accept'...")
                 await accept_button.click()
                 print("Cookies acceptés.")
-                # On attend un court instant que le dialogue disparaisse
                 await page.wait_for_timeout(1000) 
             except PlaywrightTimeoutError:
-                # Si le bouton n'apparaît pas dans le temps imparti, on considère qu'il n'y en a pas.
                 print("Aucune bannière de cookies détectée, on continue.")
             
-            print("Attente de la visibilité du champ 'username'...")
-            username_selector = "#username"
-            await page.wait_for_selector(username_selector, state="visible", timeout=30000)
-            await page.fill(username_selector, username)
+            # --- MODIFICATION CLÉ : ON UTILISE get_by_label ---
+            # Cette méthode est beaucoup plus fiable car elle imite un utilisateur
+            # qui cherche un champ à côté d'un texte spécifique.
+            # Elle attend automatiquement que l'élément soit visible et cliquable.
             
-            print("Attente de la visibilité du champ 'password'...")
-            password_selector = "#password"
-            await page.wait_for_selector(password_selector, state="visible", timeout=30000)
-            await page.fill(password_selector, password)
+            print("Remplissage du champ 'username' via son label...")
+            await page.get_by_label("Username, Phone, or Email").fill(username)
+            
+            print("Remplissage du champ 'password' via son label...")
+            await page.get_by_label("Password").fill(password)
             
             print("Clic sur le bouton de connexion...")
-            await page.click("button#login")
+            # On cible le bouton par son rôle et son nom visible pour plus de fiabilité
+            await page.get_by_role("button", name="Log In").click()
             
             print("Attente de la redirection après connexion...")
             await page.wait_for_url("https://www.chess.com/home", timeout=60000)
@@ -228,3 +223,4 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+
