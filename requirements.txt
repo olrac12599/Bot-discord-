@@ -5,3 +5,7 @@ mss
 moviepy
 python-dotenv
 chromedriver-autoinstaller
+imageio
+imageio-ffmpeg
+decorator
+tqdm
