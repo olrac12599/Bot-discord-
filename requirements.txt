@@ -2,8 +2,3 @@ discord.py
 twitchio
 playwright
 playwright-stealth
-stockfish
-python-chess
-Flask
-opencv-python
-numpy
