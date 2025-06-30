@@ -10,3 +10,4 @@ moviepy
 chromedriver-autoinstaller
 python-dotenv
 selenium
+moviepy.editor
