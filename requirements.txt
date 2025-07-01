@@ -2,3 +2,6 @@ discord.py
 twitchio
 requests
 python-chess
+opencv-python
+numpy
+mss
