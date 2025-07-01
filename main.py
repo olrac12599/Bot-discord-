@@ -106,6 +106,17 @@ def record_chess_video(game_id):
                 EC.presence_of_element_located((By.CSS_SELECTOR, ".home-user-info, .nav-menu-area"))
             )
             print("[✅] Connexion réussie")
+            
+            # Fermer la pop-up "Leçon rapide" si affichée
+try:
+    dismiss_button = WebDriverWait(driver, 5).until(
+        EC.element_to_be_clickable((By.XPATH, "//button[contains(text(), 'Non, merci')]"))
+    )
+    dismiss_button.click()
+    print("[✅] Pop-up 'Leçon rapide' fermée.")
+    time.sleep(1)
+except Exception:
+    print("[ℹ️] Aucun pop-up 'Leçon rapide' détecté.")
 
         except Exception as e:
             print("[🚨] Échec de la connexion :", e)
