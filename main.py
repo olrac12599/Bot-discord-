@@ -167,24 +167,17 @@ async def start_chess_analysis(ctx, game_id: str):
             if debug_html:
                 await ctx.send(" Mise en ligne de la page de débogage...")
                 try:
-                    # Envoi du contenu HTML au service paste.gg
-                    payload = {
-                        "files": [{
-                            "name": f"debug_chess_com_{game_id}.html",
-                            "content": {
-                                "format": "text",
-                                "value": debug_html
-                            }
-                        }]
-                    }
-                    headers = {"Content-Type": "application/json"}
-                    post_response = requests.post("https://api.paste.gg/v1/pastes", json=payload, headers=headers, timeout=10)
+                    # Envoi du contenu HTML au service dpaste.com
+                    # Il attend des données de formulaire, pas du JSON
+                    payload = {'content': debug_html}
+                    post_response = requests.post("https://dpaste.com/api/", data=payload, timeout=10)
                     post_response.raise_for_status()
-                    paste_data = post_response.json()
-                    paste_id = paste_data['result']['id']
+                    
+                    # La réponse est directement l'URL du paste
+                    paste_url = post_response.text
                     
                     # Envoi du lien à l'utilisateur
-                    await ctx.send(f"🔗 **Voici un lien pour voir ce que j'ai vu :**\nhttps://paste.gg/p/anonymous/{paste_id}")
+                    await ctx.send(f"🔗 **Voici un lien pour voir ce que j'ai vu :**\n{paste_url}")
 
                 except Exception as e:
                     await ctx.send(f"😥 Je n'ai pas réussi à mettre la page en ligne pour le débogage. Erreur : {e}")
@@ -197,7 +190,6 @@ async def start_chess_analysis(ctx, game_id: str):
 
     except Exception as e:
         await ctx.send(f"❌ Une erreur critique est survenue : **{e}**")
-
 
 @bot.command(name="stopchess")
 async def stop_chess_analysis(ctx):
