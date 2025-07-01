@@ -58,6 +58,7 @@ def record_chess_video(game_id):
         driver = webdriver.Chrome(options=chrome_options)
         wait = WebDriverWait(driver, 20)
 
+        # 🎥 Enregistrement écran
         ffmpeg = subprocess.Popen([
             "ffmpeg", "-y",
             "-video_size", "1920x1080",
@@ -69,25 +70,39 @@ def record_chess_video(game_id):
             video_filename
         ])
 
+        # 🌐 Aller sur Chess.com
         driver.get("https://www.chess.com/login_and_go")
 
-        # 🔒 Accepter les cookies si bouton visible
+        # 🔒 Accepter cookies si affiché
         try:
             accept_button = WebDriverWait(driver, 5).until(
                 EC.element_to_be_clickable((By.XPATH, "//button[contains(text(), 'I Accept')]"))
             )
             accept_button.click()
-            print("[✅] Bouton 'I Accept' cliqué.")
+            print("[✅] 'I Accept' cliqué.")
             time.sleep(1)
-        except Exception as e:
-            print("[⚠️] Aucun bouton 'I Accept' trouvé.")
+        except Exception:
+            print("[⚠️] Bouton 'I Accept' non trouvé.")
 
-        # Connexion
-        wait.until(EC.visibility_of_element_located((By.ID, "username"))).send_keys(CHESS_USERNAME)
-        wait.until(EC.visibility_of_element_located((By.ID, "password"))).send_keys(CHESS_PASSWORD)
-        wait.until(EC.element_to_be_clickable((By.ID, "login"))).click()
-        wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, ".home-user-info, .nav-menu-area")))
+        # 🔐 Connexion
+        WebDriverWait(driver, 10).until(
+            EC.presence_of_element_located((By.ID, "username"))
+        ).send_keys(CHESS_USERNAME)
 
+        WebDriverWait(driver, 10).until(
+            EC.presence_of_element_located((By.ID, "password"))
+        ).send_keys(CHESS_PASSWORD)
+
+        WebDriverWait(driver, 10).until(
+            EC.element_to_be_clickable((By.ID, "login"))
+        ).click()
+
+        WebDriverWait(driver, 15).until(
+            EC.presence_of_element_located((By.CSS_SELECTOR, ".home-user-info, .nav-menu-area"))
+        )
+        print("[✅] Connexion réussie")
+
+        # 🎯 Accès à la partie
         driver.get(f"https://www.chess.com/game/live/{game_id}")
         time.sleep(6)
 
@@ -117,6 +132,7 @@ async def videochess(ctx, game_id: str):
     try:
         video_file, screenshot = await asyncio.to_thread(record_chess_video, game_id)
 
+        # 📽️ Envoi vidéo (si < 8 Mo)
         if video_file and os.path.exists(video_file):
             if os.path.getsize(video_file) < 8 * 1024 * 1024:
                 await ctx.send(file=discord.File(video_file))
@@ -126,16 +142,17 @@ async def videochess(ctx, game_id: str):
         else:
             await ctx.send("❌ Vidéo non générée.")
 
+        # 📸 Screenshot si erreur
         if screenshot and os.path.exists(screenshot):
             await ctx.send("🖼️ Screenshot lors de l’erreur :")
             await ctx.send(file=discord.File(screenshot))
             os.remove(screenshot)
 
     except Exception as e:
-        await ctx.send(f"🚨 Erreur dans la commande : {e}")
+        await ctx.send(f"🚨 Erreur : {e}")
         traceback.print_exc()
 
-# --- COMMANDE PING ---
+# --- PING ---
 @bot.command(name="ping")
 async def ping(ctx):
     await ctx.send("Pong!")
@@ -145,7 +162,7 @@ async def ping(ctx):
 async def on_ready():
     print(f"✅ Connecté en tant que {bot.user}")
 
-# --- MAIN ---
+# --- LANCEMENT ---
 async def main():
     await bot.start(DISCORD_TOKEN)
 
