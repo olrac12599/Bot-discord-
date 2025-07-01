@@ -1,5 +1,5 @@
 import discord
-from discord.ext import commands, tasks
+from discord.ext import commands
 import requests
 import os
 import asyncio
@@ -14,6 +14,7 @@ from selenium.webdriver.support import expected_conditions as EC
 from selenium.common.exceptions import TimeoutException
 import traceback
 
+# --- CAPTURE AUTOMATIQUE EN CAS D'ERREUR ---
 def capture_on_error(driver, label="error"):
     timestamp = int(time.time())
     filename = f"screenshot_{label}_{timestamp}.png"
@@ -23,6 +24,7 @@ def capture_on_error(driver, label="error"):
     except Exception as e:
         print(f"[❌] Erreur lors de la capture : {e}")
     return filename
+
 # --- CONFIG ---
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
 CHESS_USERNAME = os.getenv("CHESS_USERNAME")
@@ -51,6 +53,9 @@ def upload_file_transfer_sh(filename):
 # --- RECORD VIDEO ---
 def record_chess_video(game_id):
     os.environ["DISPLAY"] = ":99"
+    timestamp = int(time.time())
+    video_filename = f"chess_{game_id}_{timestamp}.mp4"
+
     xvfb = subprocess.Popen(["Xvfb", ":99", "-screen", "0", "1920x1080x24"])
     time.sleep(1)
 
@@ -60,9 +65,6 @@ def record_chess_video(game_id):
     chrome_options.add_argument("--window-size=1920,1080")
     driver = webdriver.Chrome(options=chrome_options)
     wait = WebDriverWait(driver, 20)
-
-    timestamp = int(time.time())
-    video_filename = f"chess_{game_id}_{timestamp}.mp4"
 
     ffmpeg = subprocess.Popen([
         "ffmpeg", "-y",
@@ -87,12 +89,18 @@ def record_chess_video(game_id):
         time.sleep(8)
 
         ffmpeg.wait()
-        
+
         if os.path.exists(video_filename):
-    print(f"[✅] Vidéo enregistrée : {video_filename}")
-else:
-    print(f"[❌] La vidéo n'a pas été générée.")
+            print(f"[✅] Vidéo enregistrée : {video_filename}")
+        else:
+            print(f"[❌] La vidéo n'a pas été générée.")
         return video_filename
+
+    except Exception as e:
+        print(f"[🚨] Erreur pendant l'enregistrement : {e}")
+        traceback.print_exc()
+        capture_on_error(driver, "record_fail")
+        return None
 
     finally:
         driver.quit()
@@ -106,25 +114,30 @@ async def videochess(ctx, game_id: str):
         video = await asyncio.to_thread(record_chess_video, game_id)
         if not video or not os.path.exists(video):
             return await ctx.send("❌ Problème: vidéo non générée.")
+
         link = upload_file_transfer_sh(video)
         if link:
             await ctx.send(f"📽️ Vidéo prête : {link}")
         else:
             await ctx.send("⚠️ Échec de l'upload.")
+
         os.remove(video)
+
     except Exception as e:
-        await ctx.send(f"🚨 Erreur : {e}")
+        await ctx.send(f"🚨 Erreur critique : {e}")
+        traceback.print_exc()
 
 # --- PING COMMAND ---
 @bot.command(name="ping")
 async def ping(ctx):
     await ctx.send("Pong!")
 
-# --- RUN ---
+# --- BOT READY ---
 @bot.event
 async def on_ready():
     print(f"Connecté comme {bot.user}")
 
+# --- MAIN ---
 async def main():
     await bot.start(DISCORD_TOKEN)
 
