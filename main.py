@@ -1,172 +1,251 @@
-import os
-import time
+# --- IMPORTS ---
 import discord
+from discord.ext import commands, tasks
+from twitchio.ext import commands as twitch_commands
+import requests
+import os
 import asyncio
-import mss
-import cv2
-import numpy as np
-import chromedriver_autoinstaller
-from selenium import webdriver
-from selenium.webdriver.chrome.options import Options
-from discord.ext import commands
-from moviepy.editor import VideoFileClip
-from playwright.async_api import async_playwright
-from playwright_stealth.async_api import stealth_async
-from pathlib import Path
-from dotenv import load_dotenv
+import chess
+import chess.pgn
+import io
+from enum import Enum, auto
+import re  # ajouté pour le parsing HTML
 
-load_dotenv()
+# --- CONFIGURATION ---
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
-CHESS_USERNAME = os.getenv("CHESS_USERNAME")
-CHESS_PASSWORD = os.getenv("CHESS_PASSWORD")
+TWITCH_CLIENT_ID = os.getenv("TWITCH_CLIENT_ID")
+TWITCH_TOKEN = os.getenv("TWITCH_TOKEN")
+TTV_BOT_NICKNAME = os.getenv("TTV_BOT_NICKNAME")
+TTV_BOT_TOKEN = os.getenv("TTV_BOT_TOKEN")
 
-VIDEO_PATH = "recording.mp4"
-COMPRESSED_PATH = "compressed.mp4"
+if not all([DISCORD_TOKEN, TWITCH_CLIENT_ID, TWITCH_TOKEN, TTV_BOT_NICKNAME, TTV_BOT_TOKEN]):
+    raise ValueError("ERREUR CRITIQUE: Variables d'environnement manquantes.")
 
+# --- INIT BOT DISCORD ---
 intents = discord.Intents.default()
 intents.message_content = True
+bot = commands.Bot(command_prefix="!", intents=intents)
 
-bot = commands.Bot(command_prefix='!', intents=intents)
-last_error = ""
-last_video_path = None
+# --- STOCKAGE ---
+tracked_games = {}  # pour analyse échecs (par salon)
+streamer_id_cache = {}
 
-# --- Fonction Playwright furtive pour récupérer PGN ---
-class ScrapingError(Exception):
-    pass
+# --- FONCTIONS UTILES ---
 
-async def get_pgn_from_chess_com(url: str, username: str, password: str):
-    videos_dir = Path("debug_videos")
-    videos_dir.mkdir(exist_ok=True)
-    browser_args = ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--disable-gpu']
+def get_live_game_moves(game_id):
+    url = f"https://www.chess.com/game/live/{game_id}"
+    headers = {"User-Agent": "Mozilla/5.0"}
+    r = requests.get(url, headers=headers, timeout=5)
+    if r.status_code != 200:
+        raise RuntimeError(f"Erreur HTTP {r.status_code} lors de la récupération.")
+    text = r.text
+    match = re.search(r'"moves":"([^"]+)"', text)
+    if not match:
+        raise RuntimeError("Impossible de trouver les coups dans la page.")
+    moves_str = match.group(1)
+    moves = moves_str.split()
+    return moves
 
-    async with async_playwright() as p:
-        browser = await p.chromium.launch(headless=True, args=browser_args)
-        context = await browser.new_context(
-            record_video_dir=str(videos_dir),
-            record_video_size={"width": 1280, "height": 720},
-            base_url="https://www.chess.com"
-        )
-        page = await context.new_page()
-        await stealth_async(page)
-        try:
-            await page.goto("/login_and_go", timeout=90000)
-            await page.wait_for_load_state('domcontentloaded')
-
-            await page.get_by_placeholder("Username, Phone, or Email").type(username, delay=50)
-            await page.get_by_placeholder("Password").type(password, delay=50)
-            await page.get_by_role("button", name="Log In").click()
-            await page.wait_for_url("**/home", timeout=15000)
-
-            await page.goto(url, timeout=90000)
-            await page.locator("button.share-button-component").click(timeout=30000)
-            await page.locator('div.share-menu-tab-component-header:has-text("PGN")').click(timeout=20000)
-            pgn_text = await page.input_value('textarea.share-menu-tab-pgn-textarea', timeout=20000)
-
-            video_path = await page.video.path()
-            await context.close()
-            await browser.close()
-            return pgn_text, video_path
-        except Exception as e:
-            await context.close()
-            await browser.close()
-            raise ScrapingError(str(e))
-
-# --- Fonctions du second script (enregistrement vidéo + compression) ---
-
-def record_game(url, duration=10):
-    global last_error
-    driver = None
+def get_lichess_evaluation(fen):
+    url = f"https://lichess.org/api/cloud-eval?fen={fen}"
     try:
-        chromedriver_autoinstaller.install()
-        chrome_options = Options()
-        # chrome_options.add_argument("--headless")
-        chrome_options.add_argument("--no-sandbox")
-        chrome_options.add_argument("--disable-dev-shm-usage")
-        chrome_options.add_argument("--window-size=1280,720")
-
-        driver = webdriver.Chrome(options=chrome_options)
-        driver.get(url)
-        time.sleep(3)
-
-        with mss.mss() as sct:
-            monitor = sct.monitors[0]
-            fourcc = cv2.VideoWriter_fourcc(*"mp4v")
-            out = cv2.VideoWriter(VIDEO_PATH, fourcc, 10.0, (monitor["width"], monitor["height"]))
-            start_time = time.time()
-            while time.time() - start_time < duration:
-                img = np.array(sct.grab(monitor))
-                frame = cv2.cvtColor(img, cv2.COLOR_BGRA2BGR)
-                out.write(frame)
-                time.sleep(0.01)
-            out.release()
-        return True
-    except Exception as e:
-        last_error = f"[Erreur record_game] {e}"
-        return False
-    finally:
-        if driver:
-            driver.quit()
-
-def compress_video():
-    global last_error
-    try:
-        clip = VideoFileClip(VIDEO_PATH)
-        clip_resized = clip.resize(height=360)
-        clip_resized.write_videofile(COMPRESSED_PATH, bitrate="500k", codec="libx264", audio=False)
-        return COMPRESSED_PATH
-    except Exception as e:
-        last_error = f"[Erreur compress_video] {e}"
+        r = requests.get(url, timeout=5)
+        r.raise_for_status()
+        data = r.json()
+        if 'pvs' in data and data['pvs']:
+            pvs0 = data['pvs'][0]
+            if 'cp' in pvs0:
+                return pvs0['cp']
+            elif 'mate' in pvs0:
+                return 10000 if pvs0['mate'] > 0 else -10000
+        return None
+    except Exception:
         return None
 
-# --- Commandes Discord ---
+def classify_move(eval_before, eval_after, turn):
+    if turn == chess.BLACK:
+        eval_before = -eval_before
+        eval_after = -eval_after
+    loss = eval_before - eval_after
+    if loss >= 300: return "🤯 Gaffe monumentale"
+    if loss >= 150: return "⁉️ Gaffe"
+    if loss >= 70: return "❓ Erreur"
+    if loss >= 30: return "🤔 Imprécision"
+    return None
 
-@bot.command()
-async def chess(ctx, url: str):
-    if "chess.com/game/live/" not in url and "chess.com/play/game/" not in url:
-        await ctx.send("❌ URL invalide. L'URL doit provenir d'une partie sur Chess.com.")
+# --- CLASSE BOT TWITCH ---
+
+class WatcherMode(Enum):
+    IDLE = auto()
+    KEYWORD = auto()
+    MIRROR = auto()
+
+class WatcherBot(twitch_commands.Bot):
+    def __init__(self, discord_bot_instance):
+        super().__init__(token=TTV_BOT_TOKEN, prefix='!', initial_channels=[])
+        self.discord_bot = discord_bot_instance
+        self.mode = WatcherMode.IDLE
+        self.current_channel_name = None
+        self.target_discord_channel = None
+        self.keyword_to_watch = None
+
+    async def event_ready(self):
+        print(f"Bot Twitch '{TTV_BOT_NICKNAME}' prêt.")
+
+    async def stop_task(self):
+        if self.current_channel_name:
+            await self.part_channels([self.current_channel_name])
+        self.mode = WatcherMode.IDLE
+        self.current_channel_name = None
+        self.target_discord_channel = None
+        self.keyword_to_watch = None
+
+    async def start_keyword_watch(self, twitch_channel, keyword, discord_channel):
+        await self.stop_task()
+        self.mode = WatcherMode.KEYWORD
+        self.keyword_to_watch = keyword
+        self.target_discord_channel = discord_channel
+        self.current_channel_name = twitch_channel.lower()
+        await self.join_channels([self.current_channel_name])
+
+    async def start_mirror(self, twitch_channel, discord_channel):
+        await self.stop_task()
+        self.mode = WatcherMode.MIRROR
+        self.target_discord_channel = discord_channel
+        self.current_channel_name = twitch_channel.lower()
+        await self.join_channels([self.current_channel_name])
+
+    async def event_message(self, message):
+        if message.echo or self.mode == WatcherMode.IDLE:
+            return
+
+        if self.mode == WatcherMode.KEYWORD:
+            if self.keyword_to_watch.lower() in message.content.lower():
+                embed = discord.Embed(
+                    title="🚨 Mot-Clé Twitch détecté !",
+                    description=message.content,
+                    color=discord.Color.orange()
+                )
+                embed.set_footer(text=f"Chaîne : {message.channel.name} | Auteur : {message.author.name}")
+                await self.target_discord_channel.send(embed=embed)
+
+        elif self.mode == WatcherMode.MIRROR:
+            msg = f"**{message.author.name}**: {message.content}"
+            await self.target_discord_channel.send(msg[:2000])
+
+# --- COMMANDES DISCORD ---
+
+@bot.command(name="chess")
+async def start_chess_analysis(ctx, game_id: str):
+    if ctx.channel.id in tracked_games:
+        await ctx.send("⏳ Une analyse est déjà en cours dans ce salon. Utilisez `!stopchess` pour l'arrêter.")
         return
 
-    msg = await ctx.send("🕵️ **Lancement du scraping furtif...** Connexion à Chess.com.")
     try:
-        pgn, video_path = await get_pgn_from_chess_com(url, CHESS_USERNAME, CHESS_PASSWORD)
-        pgn_short = (pgn[:1900] + "...") if len(pgn) > 1900 else pgn
-        await msg.edit(content=f"✅ **PGN récupéré !**\n```\n{pgn_short}\n```\n*Vidéo enregistrée en debug.*")
-        # Optionnel: gérer video_path, sauvegarde, etc.
-    except ScrapingError as e:
-        await msg.edit(content=f"❌ Erreur lors du scraping: {e}")
-
-@bot.command()
-async def record(ctx, url: str):
-    await ctx.send(f"Enregistrement vidéo de la partie : {url}")
-    loop = asyncio.get_event_loop()
-    success = await loop.run_in_executor(None, record_game, url)
-    if success:
-        await ctx.send("✅ Partie enregistrée ! Utilise `!cam` pour récupérer la vidéo.")
-    else:
-        await ctx.send("❌ Erreur lors de l'enregistrement vidéo.")
-        if last_error:
-            await ctx.send(f"🪵 Log : ```{last_error}```")
-
-@bot.command()
-async def cam(ctx):
-    if not os.path.exists(VIDEO_PATH):
-        await ctx.send("⚠️ Aucune vidéo enregistrée.")
+        moves = get_live_game_moves(game_id)  # test validité
+    except Exception as e:
+        await ctx.send(f"❌ Erreur récupération partie : {e}")
         return
 
-    await ctx.send("Compression de la vidéo...")
-    loop = asyncio.get_event_loop()
-    compressed = await loop.run_in_executor(None, compress_video)
-    if compressed and os.path.exists(compressed):
-        size = os.path.getsize(compressed)
-        if size < 8 * 1024 * 1024:
-            await ctx.send("🎥 Voici la vidéo compressée :", file=discord.File(compressed))
-        else:
-            await ctx.send("🚫 La vidéo reste trop grosse même après compression.")
+    tracked_games[ctx.channel.id] = {"game_id": game_id, "last_ply": 0}
+    game_analysis_loop.start(ctx)
+    await ctx.send(f"✅ Analyse démarrée pour la partie live `{game_id}`. Mise à jour toutes les 15 secondes.")
+
+@bot.command(name="stopchess")
+async def stop_chess_analysis(ctx):
+    if ctx.channel.id in tracked_games:
+        game_analysis_loop.cancel()
+        del tracked_games[ctx.channel.id]
+        await ctx.send("⏹️ Analyse arrêtée.")
     else:
-        await ctx.send("❌ Erreur lors de la compression.")
-        if last_error:
-            await ctx.send(f"🪵 Log : ```{last_error}```")
+        await ctx.send("Aucune analyse active dans ce salon.")
+
+@bot.command(name="motcle")
+@commands.has_permissions(administrator=True)
+async def watch_keyword(ctx, streamer: str, *, keyword: str):
+    if hasattr(bot, 'twitch_bot'):
+        await bot.twitch_bot.start_keyword_watch(streamer, keyword, ctx.channel)
+        await ctx.send(f"🔍 Mot-clé **{keyword}** sur **{streamer}** surveillé.")
+
+@bot.command(name="tchat")
+@commands.has_permissions(administrator=True)
+async def mirror_chat(ctx, streamer: str):
+    if hasattr(bot, 'twitch_bot'):
+        await bot.twitch_bot.start_mirror(streamer, ctx.channel)
+        await ctx.send(f"🪞 Miroir du chat de **{streamer}** activé.")
+
+@bot.command(name="stop")
+@commands.has_permissions(administrator=True)
+async def stop_twitch_watch(ctx):
+    if hasattr(bot, 'twitch_bot'):
+        await bot.twitch_bot.stop_task()
+        await ctx.send("🛑 Surveillance Twitch arrêtée.")
+
+@bot.command(name="ping")
+async def ping(ctx):
+    await ctx.send("Pong!")
+
+# --- TÂCHE D'ANALYSE ÉCHECS ---
+
+@tasks.loop(seconds=15)
+async def game_analysis_loop(ctx):
+    cid = ctx.channel.id
+    if cid not in tracked_games:
+        game_analysis_loop.cancel()
+        return
+    game_id = tracked_games[cid]["game_id"]
+
+    try:
+        moves = get_live_game_moves(game_id)
+        board = chess.Board()
+        last_ply = tracked_games[cid]["last_ply"]
+        current_ply = len(moves)
+
+        # Analyser uniquement les coups nouveaux
+        for i in range(last_ply, current_ply):
+            move_san = moves[i]
+            try:
+                move = board.parse_san(move_san)
+            except Exception:
+                break
+            fen_before = board.fen()
+            turn = board.turn
+            board.push(move)
+            eval_before = get_lichess_evaluation(fen_before)
+            eval_after = get_lichess_evaluation(board.fen())
+
+            if eval_before is not None and eval_after is not None:
+                quality = classify_move(eval_before, eval_after, turn)
+                if quality:
+                    ply_num = i+1
+                    await ctx.send(f"**{(ply_num+1)//2}. {move_san}** – {quality} (Eval: {eval_before/100:.2f} ➜ {eval_after/100:.2f})")
+
+        tracked_games[cid]["last_ply"] = current_ply
+
+    except RuntimeError as e:
+        await ctx.send(f"⚠️ {e} Analyse arrêtée.")
+        tracked_games.pop(cid, None)
+        game_analysis_loop.cancel()
+    except Exception as e:
+        await ctx.send(f"⚠️ Erreur durant l'analyse : {e}")
+        tracked_games.pop(cid, None)
+        game_analysis_loop.cancel()
+
+# --- ÉVÉNEMENTS ---
+
+@bot.event
+async def on_ready():
+    print(f"Bot Discord connecté en tant que {bot.user} !")
+
+# --- LANCEMENT ---
+
+async def main():
+    twitch_bot_instance = WatcherBot(bot)
+    bot.twitch_bot = twitch_bot_instance
+    await asyncio.gather(
+        bot.start(DISCORD_TOKEN),
+        twitch_bot_instance.start()
+    )
 
 if __name__ == "__main__":
-    print("[INFO] Bot en cours de démarrage...")
-    bot.run(DISCORD_TOKEN)
+    asyncio.run(main())
