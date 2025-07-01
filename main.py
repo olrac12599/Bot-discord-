@@ -33,27 +33,33 @@ streamer_id_cache = {}
 # --- FONCTIONS UTILES ---
 
 def get_live_game_moves(game_id):
+    """
+    Tente de récupérer les coups.
+    Retourne (liste_des_coups, None) en cas de succès.
+    Retourne (None, contenu_html_de_la_page) en cas d'échec.
+    """
     url = f"https://www.chess.com/game/live/{game_id}"
     headers = {"User-Agent": "Mozilla/5.0"}
-    r = requests.get(url, headers=headers, timeout=5)
     
-    if r.status_code != 200:
-        raise RuntimeError(f"Erreur HTTP {r.status_code} lors de la récupération.")
+    try:
+        r = requests.get(url, headers=headers, timeout=5)
+        r.raise_for_status() # Lève une erreur si le status n'est pas 200
+        text = r.text
+        match = re.search(r'"moves":"([^"]+)"', text)
         
-    text = r.text
-    match = re.search(r'"moves":"([^"]+)"', text)
-    
-    if not match:
-        # Crée un fichier de débogage si les coups ne sont pas trouvés
-        debug_filename = f"debug_chess_com_{game_id}.html"
-        with open(debug_filename, "w", encoding="utf-8") as f:
-            f.write(text)
-        # Lève une erreur qui inclut le nom du fichier de débogage
-        raise RuntimeError("Impossible de trouver les coups dans la page.")
-        
-    moves_str = match.group(1)
-    moves = moves_str.split()
-    return moves
+        if not match:
+            # Échec : impossible de trouver les coups, on retourne le HTML pour débogage
+            return None, text
+            
+        # Succès
+        moves_str = match.group(1)
+        moves = moves_str.split()
+        return moves, None
+
+    except requests.exceptions.RequestException as e:
+        # Lève une erreur claire si la page web n'est pas accessible
+        raise RuntimeError(f"Impossible de contacter chess.com : {e}")
+
 
 def get_lichess_evaluation(fen):
     url = f"https://lichess.org/api/cloud-eval?fen={fen}"
@@ -151,20 +157,47 @@ async def start_chess_analysis(ctx, game_id: str):
         return
 
     await ctx.send(f"🕵️‍♂️ Lancement de l'analyse pour la partie `{game_id}`...")
+    
     try:
-        get_live_game_moves(game_id)
+        moves, debug_html = get_live_game_moves(game_id)
+
+        if moves is None:
+            # L'analyse a échoué, on envoie le lien de débogage
+            await ctx.send(f"❌ Erreur : Impossible de trouver les coups dans la page.")
+            if debug_html:
+                await ctx.send(" Mise en ligne de la page de débogage...")
+                try:
+                    # Envoi du contenu HTML au service paste.gg
+                    payload = {
+                        "files": [{
+                            "name": f"debug_chess_com_{game_id}.html",
+                            "content": {
+                                "format": "text",
+                                "value": debug_html
+                            }
+                        }]
+                    }
+                    headers = {"Content-Type": "application/json"}
+                    post_response = requests.post("https://api.paste.gg/v1/pastes", json=payload, headers=headers, timeout=10)
+                    post_response.raise_for_status()
+                    paste_data = post_response.json()
+                    paste_id = paste_data['result']['id']
+                    
+                    # Envoi du lien à l'utilisateur
+                    await ctx.send(f"🔗 **Voici un lien pour voir ce que j'ai vu :**\nhttps://paste.gg/p/anonymous/{paste_id}")
+
+                except Exception as e:
+                    await ctx.send(f"😥 Je n'ai pas réussi à mettre la page en ligne pour le débogage. Erreur : {e}")
+            return
+
+        # L'analyse a réussi
         tracked_games[ctx.channel.id] = {"game_id": game_id, "last_ply": 0}
         game_analysis_loop.start(ctx)
         await ctx.send("✅ Analyse démarrée avec succès !")
+
     except Exception as e:
-        await ctx.send(f"❌ Erreur lors de l'analyse : **{e}**")
-        debug_filename = f"debug_chess_com_{game_id}.html"
-        if os.path.exists(debug_filename):
-            await ctx.send(
-                "Voici le fichier de débogage. Ouvrez-le dans votre navigateur pour voir ce que le bot a vu :",
-                file=discord.File(debug_filename)
-            )
-            os.remove(debug_filename)
+        await ctx.send(f"❌ Une erreur critique est survenue : **{e}**")
+
 
 @bot.command(name="stopchess")
 async def stop_chess_analysis(ctx):
@@ -211,7 +244,14 @@ async def game_analysis_loop(ctx):
     game_id = tracked_games[cid]["game_id"]
 
     try:
-        moves = get_live_game_moves(game_id)
+        moves, _ = get_live_game_moves(game_id)
+        if moves is None:
+            await ctx.send(f"⚠️ La partie `{game_id}` n'est plus accessible ou est terminée. Analyse arrêtée.")
+            if cid in tracked_games:
+                del tracked_games[cid]
+            game_analysis_loop.cancel()
+            return
+            
         board = chess.Board()
         last_ply = tracked_games[cid]["last_ply"]
         current_ply = len(moves)
@@ -265,4 +305,3 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
-
