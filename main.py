@@ -11,14 +11,6 @@ import io
 from enum import Enum, auto
 import re
 
-# --- IMPORTS POUR LA CAPTURE VIDÉO ---
-import cv2 # opencv-python ou opencv-python-headless
-import numpy as np
-import mss
-import threading
-import time
-import subprocess
-
 # --- CONFIGURATION ---
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
 TWITCH_CLIENT_ID = os.getenv("TWITCH_CLIENT_ID")
@@ -35,9 +27,8 @@ intents.message_content = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 
 # --- STOCKAGE ---
-tracked_games = {}  # pour analyse échecs (par salon)
+tracked_games = {}
 streamer_id_cache = {}
-tracked_recordings = {} # pour l'enregistrement de l'écran (par salon)
 
 # --- FONCTIONS UTILES ---
 
@@ -45,12 +36,21 @@ def get_live_game_moves(game_id):
     url = f"https://www.chess.com/game/live/{game_id}"
     headers = {"User-Agent": "Mozilla/5.0"}
     r = requests.get(url, headers=headers, timeout=5)
+    
     if r.status_code != 200:
         raise RuntimeError(f"Erreur HTTP {r.status_code} lors de la récupération.")
+        
     text = r.text
     match = re.search(r'"moves":"([^"]+)"', text)
+    
     if not match:
+        # Crée un fichier de débogage si les coups ne sont pas trouvés
+        debug_filename = f"debug_chess_com_{game_id}.html"
+        with open(debug_filename, "w", encoding="utf-8") as f:
+            f.write(text)
+        # Lève une erreur qui inclut le nom du fichier de débogage
         raise RuntimeError("Impossible de trouver les coups dans la page.")
+        
     moves_str = match.group(1)
     moves = moves_str.split()
     return moves
@@ -146,123 +146,34 @@ class WatcherBot(twitch_commands.Bot):
 
 @bot.command(name="chess")
 async def start_chess_analysis(ctx, game_id: str):
-    channel_id = ctx.channel.id
-    if channel_id in tracked_games or channel_id in tracked_recordings:
-        await ctx.send("⏳ Une analyse ou un enregistrement est déjà en cours. Utilisez `!stopchess` pour l'arrêter.")
+    if ctx.channel.id in tracked_games:
+        await ctx.send("⏳ Une analyse est déjà en cours dans ce salon. Utilisez `!stopchess` pour l'arrêter.")
         return
 
-    # --- DÉMARRAGE IMMÉDIAT DE L'ENREGISTREMENT ---
-    await ctx.send(f"🎥 Lancement de l'enregistrement...")
-    
-    raw_video_path = f"raw_{channel_id}.mp4"
-    stop_event = threading.Event()
-    
-    def video_recorder(path, stop_flag):
-        with mss.mss() as sct:
-            monitor = sct.monitors[1]
-            fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-            out = cv2.VideoWriter(path, fourcc, 2.0, (monitor["width"], monitor["height"]))
-            while not stop_flag.is_set():
-                img = sct.grab(monitor)
-                frame = np.array(img)
-                frame_bgr = cv2.cvtColor(frame, cv2.COLOR_BGRA2BGR)
-                out.write(frame_bgr)
-                time.sleep(0.4)
-            out.release()
-            print(f"Enregistrement brut '{path}' terminé.")
-
-    recorder_thread = threading.Thread(target=video_recorder, args=(raw_video_path, stop_event))
-    recorder_thread.start()
-    
-    tracked_recordings[channel_id] = {
-        "thread": recorder_thread,
-        "stop_event": stop_event,
-        "raw_path": raw_video_path
-    }
-    
-    # --- TENTATIVE DE DÉMARRAGE DE L'ANALYSE ---
-    await ctx.send(f"Tentative d'analyse de la partie `{game_id}`...")
+    await ctx.send(f"🕵️‍♂️ Lancement de l'analyse pour la partie `{game_id}`...")
     try:
         get_live_game_moves(game_id)
-        tracked_games[channel_id] = {"game_id": game_id, "last_ply": 0}
+        tracked_games[ctx.channel.id] = {"game_id": game_id, "last_ply": 0}
         game_analysis_loop.start(ctx)
-        await ctx.send(f"✅ Analyse démarrée avec succès !")
+        await ctx.send("✅ Analyse démarrée avec succès !")
     except Exception as e:
-        await ctx.send(f"❌ L'analyse a échoué : **{e}**\nL'enregistrement continue. Utilisez `!cam` pour voir la vidéo ou `!stopchess` pour tout arrêter.")
+        await ctx.send(f"❌ Erreur lors de l'analyse : **{e}**")
+        debug_filename = f"debug_chess_com_{game_id}.html"
+        if os.path.exists(debug_filename):
+            await ctx.send(
+                "Voici le fichier de débogage. Ouvrez-le dans votre navigateur pour voir ce que le bot a vu :",
+                file=discord.File(debug_filename)
+            )
+            os.remove(debug_filename)
 
 @bot.command(name="stopchess")
 async def stop_chess_analysis(ctx):
-    channel_id = ctx.channel.id
-    stopped_something = False
-
-    if channel_id in tracked_games:
+    if ctx.channel.id in tracked_games:
         game_analysis_loop.cancel()
-        del tracked_games[channel_id]
-        await ctx.send("⏹️ Analyse d'échecs arrêtée.")
-        stopped_something = True
-
-    if channel_id in tracked_recordings:
-        rec_data = tracked_recordings.pop(channel_id)
-        rec_data['stop_event'].set()
-        await asyncio.to_thread(rec_data['thread'].join)
-        
-        if os.path.exists(rec_data['raw_path']):
-            await asyncio.to_thread(os.remove, rec_data['raw_path'])
-        
-        await ctx.send("🎥 Enregistrement arrêté et fichiers nettoyés.")
-        stopped_something = True
-    
-    if not stopped_something:
-        await ctx.send("Aucune analyse ou enregistrement actif dans ce salon.")
-
-@bot.command(name="cam")
-async def send_capture(ctx):
-    channel_id = ctx.channel.id
-    if channel_id not in tracked_recordings:
-        await ctx.send("❌ Aucun enregistrement en cours. Lancez une analyse avec `!chess` d'abord.")
-        return
-
-    await ctx.send("⏳ Arrêt de l'enregistrement et compression de la vidéo... Ceci peut prendre un moment.")
-
-    rec_data = tracked_recordings[channel_id]
-    stop_event, raw_path, thread = rec_data['stop_event'], rec_data['raw_path'], rec_data['thread']
-    
-    stop_event.set()
-    await asyncio.to_thread(thread.join)
-
-    compressed_path = f"compressed_{channel_id}.mp4"
-
-    def compress_video():
-        try:
-            command = [
-                'ffmpeg', '-i', raw_path, '-c:v', 'libx264', 
-                '-preset', 'veryfast', '-crf', '30', '-y', compressed_path
-            ]
-            subprocess.run(command, check=True, capture_output=True, text=True)
-            return True, None
-        except FileNotFoundError:
-            return False, "Erreur critique : `ffmpeg` n'est pas installé ou accessible."
-        except subprocess.CalledProcessError as e:
-            return False, f"Erreur de ffmpeg : `{e.stderr}`"
-
-    success, error = await asyncio.to_thread(compress_video)
-
-    if not success:
-        await ctx.send(f"❌ La compression a échoué. {error}")
+        del tracked_games[ctx.channel.id]
+        await ctx.send("⏹️ Analyse arrêtée.")
     else:
-        file_size = os.path.getsize(compressed_path)
-        if file_size > 8 * 1024 * 1024:
-            await ctx.send(f"😥 La vidéo compressée fait **{file_size / 1024 / 1024:.2f} Mo**, dépassant la limite de 8 Mo de Discord.")
-        else:
-            await ctx.send("✅ Voici la capture vidéo de l'activité du bot :", file=discord.File(compressed_path))
-    
-    if os.path.exists(raw_path): os.remove(raw_path)
-    if os.path.exists(compressed_path): os.remove(compressed_path)
-    
-    # La clé a déjà été supprimée au début de la commande, mais on s'assure
-    if channel_id in tracked_recordings:
-        del tracked_recordings[channel_id]
-
+        await ctx.send("Aucune analyse active dans ce salon.")
 
 @bot.command(name="motcle")
 @commands.has_permissions(administrator=True)
@@ -327,11 +238,13 @@ async def game_analysis_loop(ctx):
 
     except RuntimeError as e:
         await ctx.send(f"⚠️ {e} Analyse arrêtée.")
-        tracked_games.pop(cid, None)
+        if cid in tracked_games:
+             del tracked_games[cid]
         game_analysis_loop.cancel()
     except Exception as e:
         await ctx.send(f"⚠️ Erreur durant l'analyse : {e}")
-        tracked_games.pop(cid, None)
+        if cid in tracked_games:
+             del tracked_games[cid]
         game_analysis_loop.cancel()
 
 # --- ÉVÉNEMENTS ---
@@ -352,3 +265,4 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+
