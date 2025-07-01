@@ -24,7 +24,7 @@ intents = discord.Intents.default()
 intents.message_content = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 
-# --- CAPTURE SI ERREUR ---
+# --- CAPTURE EN CAS D'ERREUR ---
 def capture_on_error(driver, label="error"):
     timestamp = int(time.time())
     filename = f"screenshot_{label}_{timestamp}.png"
@@ -33,10 +33,10 @@ def capture_on_error(driver, label="error"):
         print(f"[📸] Screenshot pris : {filename}")
         return filename
     except Exception as e:
-        print(f"[❌] Screenshot échoué : {e}")
+        print(f"[❌] Capture échouée : {e}")
     return None
 
-# --- VIDÉO ENREGISTREMENT COMPLET ---
+# --- ENREGISTREMENT VIDÉO ---
 def record_chess_video(game_id):
     os.environ["DISPLAY"] = ":99"
     timestamp = int(time.time())
@@ -58,7 +58,6 @@ def record_chess_video(game_id):
         driver = webdriver.Chrome(options=chrome_options)
         wait = WebDriverWait(driver, 20)
 
-        # 🎥 Enregistrement écran
         ffmpeg = subprocess.Popen([
             "ffmpeg", "-y",
             "-video_size", "1920x1080",
@@ -70,10 +69,9 @@ def record_chess_video(game_id):
             video_filename
         ])
 
-        # 🌐 Aller sur Chess.com
         driver.get("https://www.chess.com/login_and_go")
 
-        # 🔒 Accepter cookies si affiché
+        # Accepter les cookies si présent
         try:
             accept_button = WebDriverWait(driver, 5).until(
                 EC.element_to_be_clickable((By.XPATH, "//button[contains(text(), 'I Accept')]"))
@@ -82,27 +80,37 @@ def record_chess_video(game_id):
             print("[✅] 'I Accept' cliqué.")
             time.sleep(1)
         except Exception:
-            print("[⚠️] Bouton 'I Accept' non trouvé.")
+            print("[⚠️] Bouton 'I Accept' non affiché.")
 
-        # 🔐 Connexion
-        WebDriverWait(driver, 10).until(
-            EC.presence_of_element_located((By.ID, "username"))
-        ).send_keys(CHESS_USERNAME)
+        # Connexion par placeholder
+        try:
+            username_input = WebDriverWait(driver, 10).until(
+                EC.element_to_be_clickable((By.XPATH, "//input[@placeholder='Username, Phone, or Email']"))
+            )
+            username_input.clear()
+            username_input.send_keys(CHESS_USERNAME)
 
-        WebDriverWait(driver, 10).until(
-            EC.presence_of_element_located((By.ID, "password"))
-        ).send_keys(CHESS_PASSWORD)
+            password_input = WebDriverWait(driver, 10).until(
+                EC.element_to_be_clickable((By.XPATH, "//input[@placeholder='Password']"))
+            )
+            password_input.clear()
+            password_input.send_keys(CHESS_PASSWORD)
 
-        WebDriverWait(driver, 10).until(
-            EC.element_to_be_clickable((By.ID, "login"))
-        ).click()
+            login_button = WebDriverWait(driver, 10).until(
+                EC.element_to_be_clickable((By.ID, "login"))
+            )
+            login_button.click()
 
-        WebDriverWait(driver, 15).until(
-            EC.presence_of_element_located((By.CSS_SELECTOR, ".home-user-info, .nav-menu-area"))
-        )
-        print("[✅] Connexion réussie")
+            WebDriverWait(driver, 15).until(
+                EC.presence_of_element_located((By.CSS_SELECTOR, ".home-user-info, .nav-menu-area"))
+            )
+            print("[✅] Connexion réussie")
 
-        # 🎯 Accès à la partie
+        except Exception as e:
+            print("[🚨] Échec de la connexion :", e)
+            raise e
+
+        # Accéder à la partie
         driver.get(f"https://www.chess.com/game/live/{game_id}")
         time.sleep(6)
 
@@ -132,7 +140,6 @@ async def videochess(ctx, game_id: str):
     try:
         video_file, screenshot = await asyncio.to_thread(record_chess_video, game_id)
 
-        # 📽️ Envoi vidéo (si < 8 Mo)
         if video_file and os.path.exists(video_file):
             if os.path.getsize(video_file) < 8 * 1024 * 1024:
                 await ctx.send(file=discord.File(video_file))
@@ -142,17 +149,16 @@ async def videochess(ctx, game_id: str):
         else:
             await ctx.send("❌ Vidéo non générée.")
 
-        # 📸 Screenshot si erreur
         if screenshot and os.path.exists(screenshot):
             await ctx.send("🖼️ Screenshot lors de l’erreur :")
             await ctx.send(file=discord.File(screenshot))
             os.remove(screenshot)
 
     except Exception as e:
-        await ctx.send(f"🚨 Erreur : {e}")
+        await ctx.send(f"🚨 Erreur pendant la commande : {e}")
         traceback.print_exc()
 
-# --- PING ---
+# --- COMMANDE PING ---
 @bot.command(name="ping")
 async def ping(ctx):
     await ctx.send("Pong!")
@@ -162,7 +168,7 @@ async def ping(ctx):
 async def on_ready():
     print(f"✅ Connecté en tant que {bot.user}")
 
-# --- LANCEMENT ---
+# --- MAIN ---
 async def main():
     await bot.start(DISCORD_TOKEN)
 
