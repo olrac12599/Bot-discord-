@@ -35,10 +35,6 @@ tracked_games = {}
 
 # --- FONCTION D'ANALYSE AVEC SELENIUM ---
 def get_live_game_moves(game_id):
-    """
-    Utilise Selenium pour se connecter à chess.com, accepter les cookies,
-    et récupérer les coups d'une partie. (Version améliorée)
-    """
     chrome_options = webdriver.ChromeOptions()
     chrome_options.add_argument("--headless")
     chrome_options.add_argument("--no-sandbox")
@@ -46,62 +42,52 @@ def get_live_game_moves(game_id):
     chrome_options.add_argument("--window-size=1920,1080")
 
     driver = webdriver.Chrome(options=chrome_options)
-    # On augmente un peu le temps d'attente maximum à 20 secondes
     wait = WebDriverWait(driver, 20)
 
+    timestamp = int(time.time())
+    html_filename = f"chess_game_{game_id}_{timestamp}.html"
+    screenshot_filename = f"chess_game_{game_id}_{timestamp}.png"
+
     try:
-        print("Selenium: Démarrage et navigation vers chess.com...")
         driver.get("https://www.chess.com/login_and_go")
 
-        # Accepter les cookies (méthode plus robuste)
         try:
-            print("Selenium: Recherche du bouton de cookies...")
-            # On attend juste que le bouton soit cliquable
             cookie_button = wait.until(EC.element_to_be_clickable((By.XPATH, "//*[@id='onetrust-accept-btn-handler'] | //button[contains(., 'Accept All')]")))
-            
-            # On utilise un clic JavaScript, plus fiable pour les overlays
             driver.execute_script("arguments[0].click();", cookie_button)
-            print("Selenium: Clic JavaScript effectué sur le bouton de cookies.")
-            time.sleep(1) # Petite pause pour que l'overlay disparaisse
+            time.sleep(1)
         except TimeoutException:
-            print("Selenium: Pas de pop-up de cookies trouvé ou déjà accepté.")
+            pass
 
-        # Connexion
-        print("Selenium: Entrée des identifiants...")
-        # MODIFICATION : On attend que le champ soit VISIBLE avant d'interagir
         username_field = wait.until(EC.visibility_of_element_located((By.ID, "username")))
         username_field.send_keys(CHESS_USERNAME)
 
         password_field = wait.until(EC.visibility_of_element_located((By.ID, "password")))
         password_field.send_keys(CHESS_PASSWORD)
-        
+
         wait.until(EC.element_to_be_clickable((By.ID, "login"))).click()
-        print("Selenium: Connexion effectuée.")
-
-        # On attend la confirmation de connexion en cherchant un élément de la page principale
         wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, ".home-user-info, .nav-menu-area")))
-        print("Selenium: Page principale après connexion détectée.")
 
-        # Navigation vers la partie
         game_url = f"https://www.chess.com/game/live/{game_id}"
-        print(f"Selenium: Navigation vers la partie : {game_url}")
         driver.get(game_url)
         time.sleep(5)
 
-        # Récupération des coups
-        print("Selenium: Récupération du code source de la page...")
+        # Enregistrement HTML
         page_source = driver.page_source
+        with open(html_filename, "w", encoding="utf-8") as f:
+            f.write(page_source)
+
+        # Capture d'écran
+        driver.save_screenshot(screenshot_filename)
+
         match = re.search(r'"moves":"([^"]+)"', page_source)
-        
         if not match:
-            return None, page_source
+            return None, page_source, html_filename, screenshot_filename
 
         moves_str = match.group(1)
         moves = moves_str.split()
-        return moves, None
+        return moves, None, html_filename, screenshot_filename
 
     finally:
-        print("Selenium: Fermeture du navigateur.")
         driver.quit()
 
 
@@ -141,13 +127,21 @@ async def start_chess_analysis(ctx, game_id: str):
         return
 
     await ctx.send(f"🕵️‍♂️ Lancement de l'analyse avec Selenium pour la partie `{game_id}`... (Ceci peut prendre 30-60 secondes)")
-    
+
     try:
-        # On exécute la fonction Selenium (qui est bloquante) dans un thread séparé
-        moves, debug_html = await asyncio.to_thread(get_live_game_moves, game_id)
+        moves, debug_html, html_filename, screenshot_filename = await asyncio.to_thread(get_live_game_moves, game_id)
+
+        # Envoi des fichiers
+        if os.path.exists(html_filename):
+            await ctx.send(file=discord.File(html_filename))
+            os.remove(html_filename)
+
+        if os.path.exists(screenshot_filename):
+            await ctx.send(file=discord.File(screenshot_filename))
+            os.remove(screenshot_filename)
 
         if moves is None:
-            await ctx.send(f"❌ Erreur : Impossible de trouver les coups dans la page après connexion.")
+            await ctx.send("❌ Erreur : Impossible de trouver les coups dans la page après connexion.")
             if debug_html:
                 await ctx.send(" Mise en ligne de la page de débogage...")
                 try:
@@ -166,7 +160,6 @@ async def start_chess_analysis(ctx, game_id: str):
 
     except Exception as e:
         await ctx.send(f"❌ Une erreur critique est survenue avec Selenium : **{e}**")
-
 
 @bot.command(name="stopchess")
 async def stop_chess_analysis(ctx):
@@ -189,17 +182,17 @@ async def game_analysis_loop(ctx):
     if cid not in tracked_games:
         game_analysis_loop.cancel()
         return
-    
+
     game_id = tracked_games[cid]["game_id"]
     try:
-        moves, _ = await asyncio.to_thread(get_live_game_moves, game_id)
+        moves, _, _, _ = await asyncio.to_thread(get_live_game_moves, game_id)
         if moves is None:
-            await ctx.send(f"⚠️ La partie `{game_id}` n'est plus accessible (session peut-être expirée). Analyse arrêtée.")
+            await ctx.send(f"⚠️ La partie `{game_id}` n'est plus accessible. Analyse arrêtée.")
             if cid in tracked_games:
                 del tracked_games[cid]
             game_analysis_loop.cancel()
             return
-            
+
         board = chess.Board()
         last_ply = tracked_games[cid]["last_ply"]
         current_ply = len(moves)
@@ -220,8 +213,9 @@ async def game_analysis_loop(ctx):
                 quality = classify_move(eval_before, eval_after, turn)
                 if quality:
                     await ctx.send(f"**{(i+1+1)//2}. {move_san}** – {quality} (Eval: {eval_before/100:.2f} ➜ {eval_after/100:.2f})")
-        
+
         tracked_games[cid]["last_ply"] = current_ply
+
     except Exception as e:
         await ctx.send(f"⚠️ Erreur durant l'analyse : {e}")
         if cid in tracked_games:
@@ -239,4 +233,3 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
-
