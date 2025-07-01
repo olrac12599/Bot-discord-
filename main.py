@@ -71,16 +71,18 @@ def record_chess_video(game_id):
 
         driver.get("https://www.chess.com/login_and_go")
 
-# 🔒 Accepter les conditions si le bouton "I Accept" est présent
-try:
-    accept_button = WebDriverWait(driver, 5).until(
-        EC.element_to_be_clickable((By.XPATH, "//button[contains(text(), 'I Accept')]"))
-    )
-    accept_button.click()
-    print("[✅] Bouton 'I Accept' cliqué.")
-    time.sleep(1)
-except Exception as e:
-    print("[⚠️] Bouton 'I Accept' non détecté ou déjà accepté.")
+        # 🔒 Accepter les cookies si bouton visible
+        try:
+            accept_button = WebDriverWait(driver, 5).until(
+                EC.element_to_be_clickable((By.XPATH, "//button[contains(text(), 'I Accept')]"))
+            )
+            accept_button.click()
+            print("[✅] Bouton 'I Accept' cliqué.")
+            time.sleep(1)
+        except Exception as e:
+            print("[⚠️] Aucun bouton 'I Accept' trouvé.")
+
+        # Connexion
         wait.until(EC.visibility_of_element_located((By.ID, "username"))).send_keys(CHESS_USERNAME)
         wait.until(EC.visibility_of_element_located((By.ID, "password"))).send_keys(CHESS_PASSWORD)
         wait.until(EC.element_to_be_clickable((By.ID, "login"))).click()
@@ -115,24 +117,22 @@ async def videochess(ctx, game_id: str):
     try:
         video_file, screenshot = await asyncio.to_thread(record_chess_video, game_id)
 
-        # 📽️ Envoi vidéo (si < 8 Mo)
         if video_file and os.path.exists(video_file):
             if os.path.getsize(video_file) < 8 * 1024 * 1024:
                 await ctx.send(file=discord.File(video_file))
             else:
-                await ctx.send("⚠️ Vidéo trop lourde, je ne peux pas l’envoyer directement.")
+                await ctx.send("⚠️ Vidéo trop lourde pour Discord.")
             os.remove(video_file)
         else:
             await ctx.send("❌ Vidéo non générée.")
 
-        # 📸 Envoi screenshot (si erreur)
         if screenshot and os.path.exists(screenshot):
-            await ctx.send("🖼️ Voici la capture prise lors de l'erreur :")
+            await ctx.send("🖼️ Screenshot lors de l’erreur :")
             await ctx.send(file=discord.File(screenshot))
             os.remove(screenshot)
 
     except Exception as e:
-        await ctx.send(f"🚨 Erreur : {e}")
+        await ctx.send(f"🚨 Erreur dans la commande : {e}")
         traceback.print_exc()
 
 # --- COMMANDE PING ---
