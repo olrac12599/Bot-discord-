@@ -12,7 +12,17 @@ from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.common.exceptions import TimeoutException
+import traceback
 
+def capture_on_error(driver, label="error"):
+    timestamp = int(time.time())
+    filename = f"screenshot_{label}_{timestamp}.png"
+    try:
+        driver.save_screenshot(filename)
+        print(f"[📸] Capture d’écran prise : {filename}")
+    except Exception as e:
+        print(f"[❌] Erreur lors de la capture : {e}")
+    return filename
 # --- CONFIG ---
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
 CHESS_USERNAME = os.getenv("CHESS_USERNAME")
