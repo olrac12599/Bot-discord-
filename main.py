@@ -87,6 +87,10 @@ def record_chess_video(game_id):
         time.sleep(8)
 
         ffmpeg.wait()
+        if os.path.exists(video_filename):
+    print(f"[✅] Vidéo enregistrée : {video_filename}")
+else:
+    print(f"[❌] La vidéo n'a pas été générée.")
         return video_filename
 
     finally:
