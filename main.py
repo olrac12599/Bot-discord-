@@ -24,7 +24,7 @@ intents = discord.Intents.default()
 intents.message_content = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 
-# --- CAPTURE EN CAS D'ERREUR ---
+# --- CAPTURE ERREUR ---
 def capture_on_error(driver, label="error"):
     timestamp = int(time.time())
     filename = f"screenshot_{label}_{timestamp}.png"
@@ -36,7 +36,7 @@ def capture_on_error(driver, label="error"):
         print(f"[❌] Capture échouée : {e}")
     return None
 
-# --- ENREGISTREMENT VIDÉO EN .WEBM ---
+# --- ENREGISTREMENT VIDÉO .WEBM ---
 def record_chess_video(game_id):
     os.environ["DISPLAY"] = ":99"
     timestamp = int(time.time())
@@ -72,7 +72,7 @@ def record_chess_video(game_id):
 
         driver.get("https://www.chess.com/login_and_go")
 
-        # Accepter les cookies si présent
+        # Accepter cookies
         try:
             accept_button = WebDriverWait(driver, 5).until(
                 EC.element_to_be_clickable((By.XPATH, "//button[contains(text(), 'I Accept')]"))
@@ -81,9 +81,9 @@ def record_chess_video(game_id):
             print("[✅] 'I Accept' cliqué.")
             time.sleep(1)
         except Exception:
-            print("[⚠️] Bouton 'I Accept' non affiché.")
+            print("[ℹ️] Pas de cookies à accepter.")
 
-        # Connexion par placeholder
+        # Connexion
         try:
             username_input = WebDriverWait(driver, 10).until(
                 EC.element_to_be_clickable((By.XPATH, "//input[@placeholder='Username, Phone, or Email']"))
@@ -106,23 +106,23 @@ def record_chess_video(game_id):
                 EC.presence_of_element_located((By.CSS_SELECTOR, ".home-user-info, .nav-menu-area"))
             )
             print("[✅] Connexion réussie")
-            
-            # Fermer la pop-up "Leçon rapide" si affichée
-try:
-    dismiss_button = WebDriverWait(driver, 5).until(
-        EC.element_to_be_clickable((By.XPATH, "//button[contains(text(), 'Non, merci')]"))
-    )
-    dismiss_button.click()
-    print("[✅] Pop-up 'Leçon rapide' fermée.")
-    time.sleep(1)
-except Exception:
-    print("[ℹ️] Aucun pop-up 'Leçon rapide' détecté.")
 
         except Exception as e:
-            print("[🚨] Échec de la connexion :", e)
+            print("[🚨] Connexion échouée :", e)
             raise e
 
-        # Accéder à la partie
+        # Fermer pop-up "Leçon rapide"
+        try:
+            dismiss_button = WebDriverWait(driver, 5).until(
+                EC.element_to_be_clickable((By.XPATH, "//button[contains(text(), 'Non, merci')]"))
+            )
+            dismiss_button.click()
+            print("[✅] Pop-up 'Leçon rapide' fermée.")
+            time.sleep(1)
+        except Exception:
+            print("[ℹ️] Aucun pop-up 'Leçon rapide' détecté.")
+
+        # Aller à la partie
         driver.get(f"https://www.chess.com/game/live/{game_id}")
         time.sleep(6)
 
@@ -148,7 +148,7 @@ except Exception:
 # --- COMMANDE DISCORD ---
 @bot.command(name="videochess")
 async def videochess(ctx, game_id: str):
-    await ctx.send("🎥 Enregistrement du navigateur en cours...")
+    await ctx.send("🎥 Enregistrement en cours...")
     try:
         video_file, screenshot = await asyncio.to_thread(record_chess_video, game_id)
 
@@ -167,10 +167,10 @@ async def videochess(ctx, game_id: str):
             os.remove(screenshot)
 
     except Exception as e:
-        await ctx.send(f"🚨 Erreur pendant la commande : {e}")
+        await ctx.send(f"🚨 Erreur : {e}")
         traceback.print_exc()
 
-# --- COMMANDE PING ---
+# --- PING ---
 @bot.command(name="ping")
 async def ping(ctx):
     await ctx.send("Pong!")
@@ -180,7 +180,7 @@ async def ping(ctx):
 async def on_ready():
     print(f"✅ Connecté en tant que {bot.user}")
 
-# --- LANCEMENT ---
+# --- MAIN ---
 async def main():
     await bot.start(DISCORD_TOKEN)
 
