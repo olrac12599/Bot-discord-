@@ -37,7 +37,7 @@ tracked_games = {}
 def get_live_game_moves(game_id):
     """
     Utilise Selenium pour se connecter à chess.com, accepter les cookies,
-    et récupérer les coups d'une partie.
+    et récupérer les coups d'une partie. (Version améliorée)
     """
     chrome_options = webdriver.ChromeOptions()
     chrome_options.add_argument("--headless")
@@ -46,28 +46,41 @@ def get_live_game_moves(game_id):
     chrome_options.add_argument("--window-size=1920,1080")
 
     driver = webdriver.Chrome(options=chrome_options)
-    wait = WebDriverWait(driver, 15)
+    # On augmente un peu le temps d'attente maximum à 20 secondes
+    wait = WebDriverWait(driver, 20)
 
     try:
         print("Selenium: Démarrage et navigation vers chess.com...")
         driver.get("https://www.chess.com/login_and_go")
 
-        # Accepter les cookies
+        # Accepter les cookies (méthode plus robuste)
         try:
             print("Selenium: Recherche du bouton de cookies...")
-            cookie_button = wait.until(EC.element_to_be_clickable((By.XPATH, "//button[contains(., 'Allow') or contains(., 'Accept') or contains(., 'I Agree')] | //*[@id='onetrust-accept-btn-handler']")))
-            cookie_button.click()
-            print("Selenium: Cookies acceptés.")
-            time.sleep(1)
+            # On attend juste que le bouton soit cliquable
+            cookie_button = wait.until(EC.element_to_be_clickable((By.XPATH, "//*[@id='onetrust-accept-btn-handler'] | //button[contains(., 'Accept All')]")))
+            
+            # On utilise un clic JavaScript, plus fiable pour les overlays
+            driver.execute_script("arguments[0].click();", cookie_button)
+            print("Selenium: Clic JavaScript effectué sur le bouton de cookies.")
+            time.sleep(1) # Petite pause pour que l'overlay disparaisse
         except TimeoutException:
             print("Selenium: Pas de pop-up de cookies trouvé ou déjà accepté.")
 
         # Connexion
         print("Selenium: Entrée des identifiants...")
-        wait.until(EC.presence_of_element_located((By.ID, "username"))).send_keys(CHESS_USERNAME)
-        wait.until(EC.presence_of_element_located((By.ID, "password"))).send_keys(CHESS_PASSWORD)
+        # MODIFICATION : On attend que le champ soit VISIBLE avant d'interagir
+        username_field = wait.until(EC.visibility_of_element_located((By.ID, "username")))
+        username_field.send_keys(CHESS_USERNAME)
+
+        password_field = wait.until(EC.visibility_of_element_located((By.ID, "password")))
+        password_field.send_keys(CHESS_PASSWORD)
+        
         wait.until(EC.element_to_be_clickable((By.ID, "login"))).click()
         print("Selenium: Connexion effectuée.")
+
+        # On attend la confirmation de connexion en cherchant un élément de la page principale
+        wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, ".home-user-info, .nav-menu-area")))
+        print("Selenium: Page principale après connexion détectée.")
 
         # Navigation vers la partie
         game_url = f"https://www.chess.com/game/live/{game_id}"
@@ -90,6 +103,7 @@ def get_live_game_moves(game_id):
     finally:
         print("Selenium: Fermeture du navigateur.")
         driver.quit()
+
 
 def get_lichess_evaluation(fen):
     url = f"https://lichess.org/api/cloud-eval?fen={fen}"
