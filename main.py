@@ -11,13 +11,13 @@ import io
 from enum import Enum, auto
 import re
 
-# --- NOUVEAUX IMPORTS POUR LA CAPTURE VIDÉO ---
-import cv2 # Pour la manipulation vidéo (opencv-python)
-import numpy as np # Requis par OpenCV
-import mss # Pour la capture d'écran rapide
-import threading # Pour exécuter l'enregistrement en arrière-plan
-import time # Pour contrôler le framerate
-import subprocess # Pour lancer ffmpeg
+# --- IMPORTS POUR LA CAPTURE VIDÉO ---
+import cv2 # opencv-python ou opencv-python-headless
+import numpy as np
+import mss
+import threading
+import time
+import subprocess
 
 # --- CONFIGURATION ---
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
@@ -37,7 +37,7 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 # --- STOCKAGE ---
 tracked_games = {}  # pour analyse échecs (par salon)
 streamer_id_cache = {}
-tracked_recordings = {} # NOUVEAU: pour l'enregistrement de l'écran (par salon)
+tracked_recordings = {} # pour l'enregistrement de l'écran (par salon)
 
 # --- FONCTIONS UTILES ---
 
@@ -144,40 +144,30 @@ class WatcherBot(twitch_commands.Bot):
 
 # --- COMMANDES DISCORD ---
 
-@bot.command(name="chess") # MODIFIÉ
+@bot.command(name="chess")
 async def start_chess_analysis(ctx, game_id: str):
     channel_id = ctx.channel.id
-    if channel_id in tracked_games:
-        await ctx.send("⏳ Une analyse est déjà en cours dans ce salon. Utilisez `!stopchess` pour l'arrêter.")
+    if channel_id in tracked_games or channel_id in tracked_recordings:
+        await ctx.send("⏳ Une analyse ou un enregistrement est déjà en cours. Utilisez `!stopchess` pour l'arrêter.")
         return
 
-    try:
-        get_live_game_moves(game_id)
-    except Exception as e:
-        await ctx.send(f"❌ Erreur récupération partie : {e}")
-        return
-
-    # --- DÉBUT SECTION ENREGISTREMENT VIDÉO ---
-    if channel_id in tracked_recordings:
-        old_rec = tracked_recordings.pop(channel_id)
-        old_rec['stop_event'].set()
-        
+    # --- DÉMARRAGE IMMÉDIAT DE L'ENREGISTREMENT ---
+    await ctx.send(f"🎥 Lancement de l'enregistrement...")
+    
     raw_video_path = f"raw_{channel_id}.mp4"
     stop_event = threading.Event()
     
     def video_recorder(path, stop_flag):
         with mss.mss() as sct:
-            monitor = sct.monitors[1] # Moniteur principal
+            monitor = sct.monitors[1]
             fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-            out = cv2.VideoWriter(path, fourcc, 2.0, (monitor["width"], monitor["height"])) # 2 FPS
-            
+            out = cv2.VideoWriter(path, fourcc, 2.0, (monitor["width"], monitor["height"]))
             while not stop_flag.is_set():
                 img = sct.grab(monitor)
                 frame = np.array(img)
                 frame_bgr = cv2.cvtColor(frame, cv2.COLOR_BGRA2BGR)
                 out.write(frame_bgr)
-                time.sleep(0.4) # Contrôle la boucle pour ne pas surcharger le CPU
-            
+                time.sleep(0.4)
             out.release()
             print(f"Enregistrement brut '{path}' terminé.")
 
@@ -189,22 +179,27 @@ async def start_chess_analysis(ctx, game_id: str):
         "stop_event": stop_event,
         "raw_path": raw_video_path
     }
-    # --- FIN SECTION ENREGISTREMENT VIDÉO ---
+    
+    # --- TENTATIVE DE DÉMARRAGE DE L'ANALYSE ---
+    await ctx.send(f"Tentative d'analyse de la partie `{game_id}`...")
+    try:
+        get_live_game_moves(game_id)
+        tracked_games[channel_id] = {"game_id": game_id, "last_ply": 0}
+        game_analysis_loop.start(ctx)
+        await ctx.send(f"✅ Analyse démarrée avec succès !")
+    except Exception as e:
+        await ctx.send(f"❌ L'analyse a échoué : **{e}**\nL'enregistrement continue. Utilisez `!cam` pour voir la vidéo ou `!stopchess` pour tout arrêter.")
 
-    tracked_games[channel_id] = {"game_id": game_id, "last_ply": 0}
-    game_analysis_loop.start(ctx)
-    await ctx.send(f"✅ Analyse démarrée pour la partie live `{game_id}`.\n🎥 Enregistrement de l'activité du bot démarré. Utilisez `!cam` pour obtenir la vidéo.")
-
-@bot.command(name="stopchess") # MODIFIÉ
+@bot.command(name="stopchess")
 async def stop_chess_analysis(ctx):
     channel_id = ctx.channel.id
-    
+    stopped_something = False
+
     if channel_id in tracked_games:
         game_analysis_loop.cancel()
         del tracked_games[channel_id]
         await ctx.send("⏹️ Analyse d'échecs arrêtée.")
-    else:
-        await ctx.send("Aucune analyse d'échecs active dans ce salon.")
+        stopped_something = True
 
     if channel_id in tracked_recordings:
         rec_data = tracked_recordings.pop(channel_id)
@@ -214,9 +209,12 @@ async def stop_chess_analysis(ctx):
         if os.path.exists(rec_data['raw_path']):
             await asyncio.to_thread(os.remove, rec_data['raw_path'])
         
-        print(f"Enregistrement arrêté et fichier nettoyé pour le salon {channel_id}.")
+        await ctx.send("🎥 Enregistrement arrêté et fichiers nettoyés.")
+        stopped_something = True
+    
+    if not stopped_something:
+        await ctx.send("Aucune analyse ou enregistrement actif dans ce salon.")
 
-# NOUVELLE COMMANDE !cam
 @bot.command(name="cam")
 async def send_capture(ctx):
     channel_id = ctx.channel.id
@@ -261,7 +259,9 @@ async def send_capture(ctx):
     if os.path.exists(raw_path): os.remove(raw_path)
     if os.path.exists(compressed_path): os.remove(compressed_path)
     
-    del tracked_recordings[channel_id]
+    # La clé a déjà été supprimée au début de la commande, mais on s'assure
+    if channel_id in tracked_recordings:
+        del tracked_recordings[channel_id]
 
 
 @bot.command(name="motcle")
