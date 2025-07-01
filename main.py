@@ -19,40 +19,30 @@ CHESS_PASSWORD = os.getenv("CHESS_PASSWORD")
 if not all([DISCORD_TOKEN, CHESS_USERNAME, CHESS_PASSWORD]):
     raise ValueError("ERREUR: variables d'environnement manquantes.")
 
-# --- DISCORD BOT ---
+# --- INIT DISCORD BOT ---
 intents = discord.Intents.default()
 intents.message_content = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 
-# --- CAPTURE D'ÉCRAN SI ERREUR ---
+# --- CAPTURE SI ERREUR ---
 def capture_on_error(driver, label="error"):
     timestamp = int(time.time())
     filename = f"screenshot_{label}_{timestamp}.png"
     try:
         driver.save_screenshot(filename)
-        print(f"[📸] Capture d’écran prise : {filename}")
+        print(f"[📸] Screenshot pris : {filename}")
+        return filename
     except Exception as e:
-        print(f"[❌] Capture échouée : {e}")
-    return filename
-
-# --- UPLOAD SUR TRANSFER.SH ---
-def upload_file_transfer_sh(filename):
-    try:
-        with open(filename, 'rb') as f:
-            r = requests.put(f"https://transfer.sh/{os.path.basename(filename)}", data=f)
-        if r.ok:
-            return r.text.strip()
-    except Exception as e:
-        print(f"[❌] Upload échoué : {e}")
+        print(f"[❌] Screenshot échoué : {e}")
     return None
 
-# --- ENREGISTRE TOUT LE BROWSER (vidéo complète) ---
+# --- VIDÉO ENREGISTREMENT COMPLET ---
 def record_chess_video(game_id):
     os.environ["DISPLAY"] = ":99"
     timestamp = int(time.time())
     video_filename = f"chess_{game_id}_{timestamp}.mp4"
+    screenshot_file = None
 
-    # Lancer l'écran virtuel
     xvfb = subprocess.Popen(["Xvfb", ":99", "-screen", "0", "1920x1080x24"])
     time.sleep(1)
 
@@ -68,7 +58,6 @@ def record_chess_video(game_id):
         driver = webdriver.Chrome(options=chrome_options)
         wait = WebDriverWait(driver, 20)
 
-        # 🎥 Démarrer l'enregistrement
         ffmpeg = subprocess.Popen([
             "ffmpeg", "-y",
             "-video_size", "1920x1080",
@@ -80,7 +69,6 @@ def record_chess_video(game_id):
             video_filename
         ])
 
-        # 🌐 Navigation complète
         driver.get("https://www.chess.com/login_and_go")
         wait.until(EC.visibility_of_element_located((By.ID, "username"))).send_keys(CHESS_USERNAME)
         wait.until(EC.visibility_of_element_located((By.ID, "password"))).send_keys(CHESS_PASSWORD)
@@ -94,8 +82,7 @@ def record_chess_video(game_id):
         print(f"[🚨] Erreur Selenium : {e}")
         traceback.print_exc()
         if driver:
-            capture_on_error(driver, "record_error")
-        return None
+            screenshot_file = capture_on_error(driver, "record_error")
 
     finally:
         if driver:
@@ -108,29 +95,30 @@ def record_chess_video(game_id):
                 ffmpeg.kill()
         xvfb.terminate()
 
-    if os.path.exists(video_filename):
-        print(f"[✅] Vidéo créée : {video_filename}")
-        return video_filename
-    else:
-        print(f"[❌] Fichier vidéo manquant.")
-        return None
+    return video_filename if os.path.exists(video_filename) else None, screenshot_file
 
 # --- COMMANDE DISCORD ---
 @bot.command(name="videochess")
 async def videochess(ctx, game_id: str):
     await ctx.send("🎥 Enregistrement du navigateur en cours...")
     try:
-        video_file = await asyncio.to_thread(record_chess_video, game_id)
-        if not video_file or not os.path.exists(video_file):
-            return await ctx.send("❌ Vidéo non générée.")
+        video_file, screenshot = await asyncio.to_thread(record_chess_video, game_id)
 
-        link = upload_file_transfer_sh(video_file)
-        if link:
-            await ctx.send(f"📽️ Vidéo disponible : {link}")
+        # 📽️ Envoi vidéo (si < 8 Mo)
+        if video_file and os.path.exists(video_file):
+            if os.path.getsize(video_file) < 8 * 1024 * 1024:
+                await ctx.send(file=discord.File(video_file))
+            else:
+                await ctx.send("⚠️ Vidéo trop lourde, je ne peux pas l’envoyer directement.")
+            os.remove(video_file)
         else:
-            await ctx.send("⚠️ Upload échoué.")
+            await ctx.send("❌ Vidéo non générée.")
 
-        os.remove(video_file)
+        # 📸 Envoi screenshot (si erreur)
+        if screenshot and os.path.exists(screenshot):
+            await ctx.send("🖼️ Voici la capture prise lors de l'erreur :")
+            await ctx.send(file=discord.File(screenshot))
+            os.remove(screenshot)
 
     except Exception as e:
         await ctx.send(f"🚨 Erreur : {e}")
@@ -146,7 +134,7 @@ async def ping(ctx):
 async def on_ready():
     print(f"✅ Connecté en tant que {bot.user}")
 
-# --- LANCEMENT ---
+# --- MAIN ---
 async def main():
     await bot.start(DISCORD_TOKEN)
 
