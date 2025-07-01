@@ -36,11 +36,11 @@ def capture_on_error(driver, label="error"):
         print(f"[❌] Capture échouée : {e}")
     return None
 
-# --- ENREGISTREMENT VIDÉO ---
+# --- ENREGISTREMENT VIDÉO EN .WEBM ---
 def record_chess_video(game_id):
     os.environ["DISPLAY"] = ":99"
     timestamp = int(time.time())
-    video_filename = f"chess_{game_id}_{timestamp}.mp4"
+    video_filename = f"chess_{game_id}_{timestamp}.webm"
     screenshot_file = None
 
     xvfb = subprocess.Popen(["Xvfb", ":99", "-screen", "0", "1920x1080x24"])
@@ -64,8 +64,9 @@ def record_chess_video(game_id):
             "-framerate", "25",
             "-f", "x11grab",
             "-i", ":99.0",
-            "-c:v", "libx264",
-            "-preset", "ultrafast",
+            "-c:v", "libvpx-vp9",
+            "-b:v", "1M",
+            "-pix_fmt", "yuv420p",
             video_filename
         ])
 
@@ -168,7 +169,7 @@ async def ping(ctx):
 async def on_ready():
     print(f"✅ Connecté en tant que {bot.user}")
 
-# --- MAIN ---
+# --- LANCEMENT ---
 async def main():
     await bot.start(DISCORD_TOKEN)
 
