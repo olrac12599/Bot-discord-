@@ -70,6 +70,17 @@ def record_chess_video(game_id):
         ])
 
         driver.get("https://www.chess.com/login_and_go")
+
+# 🔒 Accepter les conditions si le bouton "I Accept" est présent
+try:
+    accept_button = WebDriverWait(driver, 5).until(
+        EC.element_to_be_clickable((By.XPATH, "//button[contains(text(), 'I Accept')]"))
+    )
+    accept_button.click()
+    print("[✅] Bouton 'I Accept' cliqué.")
+    time.sleep(1)
+except Exception as e:
+    print("[⚠️] Bouton 'I Accept' non détecté ou déjà accepté.")
         wait.until(EC.visibility_of_element_located((By.ID, "username"))).send_keys(CHESS_USERNAME)
         wait.until(EC.visibility_of_element_located((By.ID, "password"))).send_keys(CHESS_PASSWORD)
         wait.until(EC.element_to_be_clickable((By.ID, "login"))).click()
