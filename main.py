@@ -102,7 +102,7 @@ def record_chess_video(game_id):
     ffmpeg = None
 
     try:
-        driver = webdriver.Chrome(ChromeDriverManager().install(), options=chrome_options)
+        driver = webdriver.Chrome(executable_path=ChromeDriverManager().install(), options=chrome_options)
         wait = WebDriverWait(driver, 20)
 
         ffmpeg = subprocess.Popen([
