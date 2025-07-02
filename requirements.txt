@@ -1,4 +1,8 @@
 discord.py
-requests
-undetected-chromedriver
-setuptools
+python-dotenv
+selenium
+chromedriver-autoinstaller
+mss
+opencv-python
+numpy
+moviepy
