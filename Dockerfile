@@ -1,19 +1,15 @@
 FROM python:3.12-slim
 
-# Installer Chromium, ChromeDriver, ffmpeg, xvfb, distutils via python3-venv
+# Installer les dépendances système nécessaires pour Chromium et autres outils
 RUN apt-get update && apt-get install -y \
-    python3-venv \
     chromium ffmpeg xvfb \
     wget unzip curl gnupg \
-    libglib2.0-0 libnss3 libgconf-2-4 libfontconfig1 \
-    libx11-xcb1 libxcomposite1 libxcursor1 libxdamage1 \
-    libxrandr2 libasound2 libatk1.0-0 libatk-bridge2.0-0 \
-    libcups2 libdrm2 libxkbcommon0 libgtk-3-0 xdg-utils \
     --no-install-recommends && \
     apt-get clean && rm -rf /var/lib/apt/lists/*
 
-# Télécharger ChromeDriver version 138 (compatible avec Chromium 138)
-RUN curl -sSLo chromedriver.zip https://storage.googleapis.com/chrome-for-testing-public/138.0.7204.49/linux64/chromedriver-linux64.zip && \
+# Télécharger et installer une version compatible de ChromeDriver
+# Note: L'URL officielle est recommandée pour la stabilité
+RUN curl -sSLo chromedriver.zip https://storage.googleapis.com/chrome-for-testing-public/126.0.6478.126/linux64/chromedriver-linux64.zip && \
     unzip chromedriver.zip && \
     mv chromedriver-linux64/chromedriver /usr/local/bin/chromedriver && \
     chmod +x /usr/local/bin/chromedriver && \
@@ -28,11 +24,11 @@ ENV CHROME_BIN=/usr/bin/chromium \
 
 WORKDIR /app
 
-# Installer les dépendances Python
+# Installer les dépendances Python à partir de requirements.txt
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copier le code source
+# Copier le code source de l'application
 COPY . .
 
 # Lancer le bot
