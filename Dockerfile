@@ -1,6 +1,6 @@
 FROM python:3.12-slim
 
-# Installer Chromium, ffmpeg, xvfb, et dépendances
+# Installer Chromium, ffmpeg, xvfb, curl, unzip et dépendances nécessaires
 RUN apt-get update && apt-get install -y \
     chromium ffmpeg xvfb \
     wget unzip curl gnupg \
@@ -11,8 +11,7 @@ RUN apt-get update && apt-get install -y \
     --no-install-recommends && \
     apt-get clean && rm -rf /var/lib/apt/lists/*
 
-# ⚠️ Supprimer chromium-driver (obsolète et incompatible)
-# Télécharger manuellement ChromeDriver 138 (pour Chromium 138)
+# ✅ Télécharger manuellement ChromeDriver 138 (compatible avec Chromium 138)
 RUN curl -sSLo chromedriver.zip https://storage.googleapis.com/chrome-for-testing-public/138.0.7204.49/linux64/chromedriver-linux64.zip && \
     unzip chromedriver.zip && \
     mv chromedriver-linux64/chromedriver /usr/local/bin/chromedriver && \
@@ -22,9 +21,9 @@ RUN curl -sSLo chromedriver.zip https://storage.googleapis.com/chrome-for-testin
 # Variables d’environnement
 ENV CHROME_BIN=/usr/bin/chromium \
     CHROMEDRIVER_PATH=/usr/local/bin/chromedriver \
+    DISPLAY=:99 \
     PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONUNBUFFERED=1 \
-    DISPLAY=:99
+    PYTHONUNBUFFERED=1
 
 WORKDIR /app
 
@@ -32,7 +31,8 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copier le code source
+# Copier ton code source
 COPY . .
 
+# Lancer le bot
 CMD ["python", "main.py"]
