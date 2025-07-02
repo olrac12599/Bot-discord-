@@ -1,9 +1,8 @@
 FROM python:3.12-slim
 
-# Installer Chromium, ffmpeg, xvfb, distutils et dépendances nécessaires
-# distutils est requis pour undetected-chromedriver
+# Installer Chromium, ChromeDriver, ffmpeg, xvfb, distutils via python3.12-venv
 RUN apt-get update && apt-get install -y \
-    python3-distutils \
+    python3.12-venv \
     chromium ffmpeg xvfb \
     wget unzip curl gnupg \
     libglib2.0-0 libnss3 libgconf-2-4 libfontconfig1 \
@@ -20,7 +19,7 @@ RUN curl -sSLo chromedriver.zip https://storage.googleapis.com/chrome-for-testin
     chmod +x /usr/local/bin/chromedriver && \
     rm -rf chromedriver.zip chromedriver-linux64
 
-# Variables d’environnement pour Selenium, Railway et Xvfb
+# Variables d’environnement
 ENV CHROME_BIN=/usr/bin/chromium \
     CHROMEDRIVER_PATH=/usr/local/bin/chromedriver \
     DISPLAY=:99 \
@@ -29,12 +28,12 @@ ENV CHROME_BIN=/usr/bin/chromium \
 
 WORKDIR /app
 
-# Copier requirements et installer dépendances Python
+# Installer les dépendances Python
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Copier ton code source
 COPY . .
 
-# Démarrage du bot
+# Lancer ton bot
 CMD ["python", "main.py"]
