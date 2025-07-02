@@ -4,7 +4,7 @@ import os
 import asyncio
 
 from pathlib import Path
-from your_scraping_module import get_pgn_from_chess_com, ScrapingError  # adapte selon ton fichier
+from scraping import get_pgn_from_chess_com, ScrapingError
 import io
 
 # --- CONFIGURATION ---
