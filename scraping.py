@@ -4,6 +4,7 @@ from pathlib import Path
 from playwright.async_api import async_playwright, TimeoutError as PlaywrightTimeoutError
 from playwright_stealth import Stealth
 from analyzer import analyze_fen_sequence
+import discord
 
 # --- LOGGER ---
 logging.basicConfig(
@@ -12,6 +13,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger("scraping")
 
+# --- FICHIERS VIDÉO ---
 videos_dir = Path("videos")
 videos_dir.mkdir(exist_ok=True)
 
@@ -64,23 +66,18 @@ async def get_pgn_from_chess_com(url, username, password, discord_channel):
             await page.goto(url, timeout=90000)
             logger.info(f"📥 Partie ouverte : {url}")
 
-            for i in range(60):
+            # Suivre et analyser les coups pendant 30 secondes (3 * 10s)
+            for i in range(3):
                 await asyncio.sleep(10)
-                if asyncio.current_task().cancelled():
-                    logger.warning("🛑 Scraping annulé par !stop")
-                    try:
-                        video_path = await page.video.path()
-                        logger.info(f"🎥 Vidéo récupérée : {video_path}")
-                    except:
-                        logger.error("❌ Échec récupération vidéo")
-                    break
 
                 current_fen = await get_fen_from_page(page)
+                logger.info(f"[FEN] ({i+1}/3) {current_fen}")
+
                 if not current_fen:
                     continue
 
                 if current_fen != last_fen and last_fen:
-                    logger.info("🔄 Nouveau coup détecté. Analyse en cours...")
+                    logger.info("🔄 Nouveau coup détecté. Analyse...")
                     result = await analyze_fen_sequence(last_fen, current_fen, color)
                     if result:
                         annotation, diff = result
@@ -91,25 +88,29 @@ async def get_pgn_from_chess_com(url, username, password, discord_channel):
 
                 last_fen = current_fen
 
-            await page.locator("button.share-button-component").click(timeout=30000)
-            await page.locator('div.share-menu-tab-component-header:has-text("PGN")').click(timeout=20000)
-            pgn = await page.input_value('textarea.share-menu-tab-pgn-textarea')
-            logger.info("✅ PGN récupéré.")
+            logger.info("🕒 30 secondes écoulées. Fin de session.")
 
+            # Enregistrer la vidéo
             video_path = await page.video.path()
-            logger.info(f"🎥 Vidéo enregistrée à : {video_path}")
+            if Path(video_path).exists():
+                await discord_channel.send("📹 Vidéo enregistrée automatiquement :", file=discord.File(video_path, "debug_video.webm"))
+                logger.info(f"🎥 Vidéo envoyée : {video_path}")
+            else:
+                await discord_channel.send("❌ Impossible de trouver la vidéo enregistrée.")
+                logger.error("❌ Vidéo non trouvée.")
 
             await context.close()
             await browser.close()
-            return pgn, video_path
+
+            return "", video_path  # on ne retourne pas le PGN ici car il n’est pas prioritaire
 
         except Exception as e:
-            logger.error(f"❌ Erreur scraping : {e}")
             try:
                 video_path = await page.video.path()
-                logger.info(f"🎥 Vidéo récupérée malgré l'erreur : {video_path}")
+                logger.warning(f"⚠️ Vidéo récupérée malgré erreur : {video_path}")
             except:
-                logger.error("❌ Impossible de récupérer la vidéo")
+                logger.error("❌ Impossible de récupérer la vidéo.")
+                video_path = None
             await context.close()
             await browser.close()
             raise ScrapingError(str(e), video_path=video_path)
