@@ -1,8 +1,8 @@
 FROM python:3.12-slim
 
-# Installer Chromium, ChromeDriver, ffmpeg, xvfb, distutils via python3.12-venv
+# Installer Chromium, ChromeDriver, ffmpeg, xvfb, distutils via python3-venv
 RUN apt-get update && apt-get install -y \
-    python3.12-venv \
+    python3-venv \
     chromium ffmpeg xvfb \
     wget unzip curl gnupg \
     libglib2.0-0 libnss3 libgconf-2-4 libfontconfig1 \
@@ -32,8 +32,8 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copier ton code source
+# Copier le code source
 COPY . .
 
-# Lancer ton bot
+# Lancer le bot
 CMD ["python", "main.py"]
