@@ -48,11 +48,12 @@ async def get_pgn_from_chess_com(url: str, username: str, password: str, discord
 
             await page.goto(url, timeout=90000)
 
-            # Analyse en direct pendant 60 secondes
-            for _ in range(60):
+            for _ in range(60):  # Surveiller pendant 10 minutes max (10s x 60)
                 await asyncio.sleep(10)
-                current_fen = await get_fen_from_page(page)
+                if asyncio.current_task().cancelled():
+                    break
 
+                current_fen = await get_fen_from_page(page)
                 if not current_fen:
                     continue
 
@@ -66,7 +67,6 @@ async def get_pgn_from_chess_com(url: str, username: str, password: str, discord
 
                 last_fen = current_fen
 
-            # Extraction du PGN
             await page.locator("button.share-button-component").click(timeout=30000)
             await page.locator('div.share-menu-tab-component-header:has-text("PGN")').click(timeout=20000)
             pgn_text = await page.input_value('textarea.share-menu-tab-pgn-textarea', timeout=20000)
@@ -74,7 +74,6 @@ async def get_pgn_from_chess_com(url: str, username: str, password: str, discord
             video_path = await page.video.path()
             await context.close()
             await browser.close()
-
             return pgn_text, video_path
 
         except Exception as e:
