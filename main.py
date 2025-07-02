@@ -9,7 +9,7 @@ from scraping import get_pgn_from_chess_com, ScrapingError
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
 CHESS_USERNAME = os.getenv("CHESS_USERNAME")
 CHESS_PASSWORD = os.getenv("CHESS_PASSWORD")
-DISCORD_FILE_LIMIT_BYTES = 8 * 1024 * 1024  # 8 Mo
+DISCORD_FILE_LIMIT_BYTES = 8 * 1024 * 1024
 
 last_video_paths = {}
 active_tasks = {}
@@ -22,7 +22,7 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 async def chess(ctx, url: str):
     if ctx.channel.id in active_tasks:
         return await ctx.send("⚠️ Une analyse est déjà en cours ici. Tape `!stop` pour l'arrêter.")
-    
+
     async def run():
         msg = await ctx.send("🕵️ Lancement de l'analyse + enregistrement vidéo...")
         try:
@@ -44,6 +44,28 @@ async def chess(ctx, url: str):
     task = asyncio.create_task(run())
     active_tasks[ctx.channel.id] = task
 
+@bot.command(name="stop")
+async def stop(ctx):
+    task = active_tasks.get(ctx.channel.id)
+    if not task:
+        return await ctx.send("❌ Aucun scraping en cours.")
+    
+    task.cancel()
+    await ctx.send("🛑 Scraping interrompu. Attente de la vidéo...")
+
+    try:
+        await task
+    except asyncio.CancelledError:
+        print("[⚠️] Scraping annulé proprement.")
+
+    video_path = last_video_paths.get(ctx.channel.id)
+    if video_path and Path(video_path).exists():
+        await ctx.send("📹 Vidéo sauvegardée :", file=discord.File(video_path, "debug_video.webm"))
+    else:
+        await ctx.send("❌ Aucune vidéo disponible.")
+    
+    active_tasks.pop(ctx.channel.id, None)
+
 @bot.command(name="cam")
 async def cam(ctx):
     video_path = last_video_paths.get(ctx.channel.id)
@@ -55,19 +77,9 @@ async def cam(ctx):
     else:
         await ctx.send(f"📦 Vidéo trop lourde ({file.stat().st_size / 1_000_000:.2f} Mo).")
 
-@bot.command(name="stop")
-async def stop(ctx):
-    task = active_tasks.get(ctx.channel.id)
-    if not task:
-        return await ctx.send("❌ Aucun scraping en cours.")
-    task.cancel()
-    await ctx.send("🛑 Scraping interrompu. Envoi de la vidéo...")
-    video_path = last_video_paths.get(ctx.channel.id)
-    if video_path and Path(video_path).exists():
-        await ctx.send("📹 Vidéo sauvegardée :", file=discord.File(video_path, "debug_video.webm"))
-    else:
-        await ctx.send("❌ Aucune vidéo disponible.")
-    active_tasks.pop(ctx.channel.id, None)
+@bot.command(name="ping")
+async def ping(ctx):
+    await ctx.send(f"Pong! {round(bot.latency * 1000)} ms")
 
 @bot.command(name="aide")
 async def aide(ctx):
@@ -76,12 +88,8 @@ async def aide(ctx):
 `!cam` – Envoie la vidéo de la dernière session
 `!stop` – Stoppe l’analyse en cours et envoie la vidéo
 `!ping` – Latence du bot
-`!aide` – Affiche cette aide
+`!aide` – Affiche ce message
 """)
-
-@bot.command(name="ping")
-async def ping(ctx):
-    await ctx.send(f"Pong! {round(bot.latency * 1000)} ms")
 
 @bot.event
 async def on_ready():
