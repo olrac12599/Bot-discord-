@@ -36,6 +36,8 @@ async def get_pgn_from_chess_com(url: str, username: str, password: str) -> (str
         page = await context.new_page()
 
         video_path = None
+        pgn_text = None
+        error = None
 
         try:
             await page.goto("https://www.chess.com/login_and_go", timeout=90000)
@@ -44,7 +46,7 @@ async def get_pgn_from_chess_com(url: str, username: str, password: str) -> (str
             try:
                 await page.get_by_role("button", name="I Accept").click(timeout=3000)
             except PlaywrightTimeoutError:
-                pass
+                pass  # Pas de bouton cookie ? pas grave.
 
             await page.get_by_placeholder("Username, Phone, or Email").type(username, delay=50)
             await page.get_by_placeholder("Password").type(password, delay=50)
@@ -53,34 +55,27 @@ async def get_pgn_from_chess_com(url: str, username: str, password: str) -> (str
             await page.wait_for_url("**/home", timeout=15000)
             await page.goto(url, timeout=90000)
 
-            # Cliquez sur le bouton "Share" (Partager)
             await page.get_by_role("button", name="Share").click(timeout=15000)
-
-            # Attendez que l’onglet PGN soit visible, puis cliquez dessus
-            await page.get_by_role("tab", name="PGN").wait_for(timeout=10000)
             await page.get_by_role("tab", name="PGN").click(timeout=5000)
 
-            # Pause légère le temps que le champ se remplisse
             await page.wait_for_timeout(1000)
-
-            # Récupération du texte PGN
             pgn_text = await page.locator('textarea.share-menu-tab-pgn-textarea').input_value(timeout=10000)
 
-            video_path = await page.video.path()
-            await context.close()
-            await browser.close()
-
-            return pgn_text, video_path
-
         except Exception as e:
+            error = str(e)
+
+        finally:
             try:
                 video_path = await page.video.path()
             except:
-                pass
-
+                video_path = None
             await context.close()
             await browser.close()
-            raise ScrapingError(str(e), video_path=video_path)
+
+        if pgn_text:
+            return pgn_text, video_path
+        else:
+            raise ScrapingError(error or "Erreur inconnue", video_path=video_path)
 
 # --- INITIALISATION DU BOT DISCORD ---
 intents = discord.Intents.default()
