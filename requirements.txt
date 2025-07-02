@@ -1,6 +1,3 @@
 discord.py
-twitchio
 requests
-python-chess
-selenium
-webdriver-manager
+undetected-chromédriver
