@@ -39,4 +39,4 @@ COPY . .
 # Étape 6: Définir la commande de lancement
 # - xvfb-run: Lance la commande suivante dans l'environnement d'écran virtuel
 # - python bot.py: Exécute votre script de bot
-CMD ["xvfb-run", "python", "bot.py"]
+CMD ["xvfb-run", "python", "main.py"]
