@@ -1,100 +1,129 @@
+import os
+import io
+import asyncio
+from pathlib import Path
+
 import discord
 from discord.ext import commands
-import os
-import asyncio
-import io
-from pathlib import Path
-from scraping import get_pgn_from_chess_com, ScrapingError
 
+from playwright.async_api import async_playwright, TimeoutError as PlaywrightTimeoutError
+from playwright_stealth import Stealth
+
+# --- CONFIGURATION ENVIRONNEMENT ---
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
 CHESS_USERNAME = os.getenv("CHESS_USERNAME")
 CHESS_PASSWORD = os.getenv("CHESS_PASSWORD")
-DISCORD_FILE_LIMIT_BYTES = 8 * 1024 * 1024
+DISCORD_FILE_LIMIT_BYTES = 8 * 1024 * 1024  # 8 Mo
 
+videos_dir = Path("videos")
+videos_dir.mkdir(exist_ok=True)
 last_video_paths = {}
-active_tasks = {}
 
+# --- EXCEPTION SPÉCIFIQUE ---
+class ScrapingError(Exception):
+    def __init__(self, message, video_path=None):
+        super().__init__(message)
+        self.video_path = video_path
+
+# --- FONCTION DE SCRAPING ---
+async def get_pgn_from_chess_com(url: str, username: str, password: str) -> (str, str):
+    stealth = Stealth()
+    async with stealth.use_async(async_playwright()) as p:
+        browser = await p.chromium.launch(headless=True, args=[
+            '--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--disable-gpu'
+        ])
+        context = await browser.new_context(record_video_dir=str(videos_dir))
+        page = await context.new_page()
+
+        video_path = None
+
+        try:
+            await page.goto("https://www.chess.com/login_and_go", timeout=90000)
+            await page.wait_for_load_state('domcontentloaded')
+
+            try:
+                await page.get_by_role("button", name="I Accept").click(timeout=3000)
+            except PlaywrightTimeoutError:
+                pass
+
+            await page.get_by_placeholder("Username, Phone, or Email").type(username, delay=50)
+            await page.get_by_placeholder("Password").type(password, delay=50)
+            await page.get_by_role("button", name="Log In").click()
+
+            await page.wait_for_url("**/home", timeout=15000)
+            await page.goto(url, timeout=90000)
+
+            await page.locator("button.share-button-component").click(timeout=30000)
+            await page.locator('div.share-menu-tab-component-header:has-text("PGN")').click(timeout=20000)
+            pgn_text = await page.input_value('textarea.share-menu-tab-pgn-textarea', timeout=20000)
+
+            video_path = await page.video.path()
+
+            await context.close()
+            await browser.close()
+
+            return pgn_text, video_path
+
+        except Exception as e:
+            try:
+                video_path = await page.video.path()
+            except:
+                pass
+
+            await context.close()
+            await browser.close()
+            raise ScrapingError(str(e), video_path=video_path)
+
+# --- INITIALISATION DU BOT DISCORD ---
 intents = discord.Intents.default()
 intents.message_content = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 
+# --- COMMANDE !chess ---
 @bot.command(name="chess")
-async def chess(ctx, url: str):
-    if ctx.channel.id in active_tasks:
-        return await ctx.send("⚠️ Une analyse est déjà en cours ici. Tape `!stop` pour l'arrêter.")
-
-    async def run():
-        msg = await ctx.send("🕵️ Lancement de l'analyse + enregistrement vidéo...")
-        try:
-            pgn, video_path = await get_pgn_from_chess_com(url, CHESS_USERNAME, CHESS_PASSWORD, ctx.channel)
-            if video_path:
-                last_video_paths[ctx.channel.id] = video_path
-            pgn_short = (pgn[:1900] + "...") if len(pgn) > 1900 else pgn
-            await msg.edit(content=f"✅ **PGN récupéré :**\n```\n{pgn_short}\n```\n*Utilisez `!cam` pour voir la vidéo.*")
-        except ScrapingError as e:
-            await msg.edit(content="❌ Erreur pendant le scraping.")
-            if e.video_path:
-                last_video_paths[ctx.channel.id] = e.video_path
-                await ctx.send("🎥 Vidéo disponible :", file=discord.File(e.video_path, "debug_video.webm"))
-            else:
-                await ctx.send("❌ Aucune vidéo enregistrée.")
-        finally:
-            active_tasks.pop(ctx.channel.id, None)
-
-    task = asyncio.create_task(run())
-    active_tasks[ctx.channel.id] = task
-
-@bot.command(name="stop")
-async def stop(ctx):
-    task = active_tasks.get(ctx.channel.id)
-    if not task:
-        return await ctx.send("❌ Aucun scraping en cours.")
-    
-    task.cancel()
-    await ctx.send("🛑 Scraping interrompu. Attente de la vidéo...")
-
+async def get_chess_pgn(ctx, url: str):
+    msg = await ctx.send("🕵️ Connexion à Chess.com et enregistrement vidéo en cours...")
     try:
-        await task
-    except asyncio.CancelledError:
-        print("[⚠️] Scraping annulé proprement.")
+        pgn, video_path = await get_pgn_from_chess_com(url, CHESS_USERNAME, CHESS_PASSWORD)
+        if video_path:
+            last_video_paths[ctx.channel.id] = video_path
+        pgn_short = (pgn[:1900] + "...") if len(pgn) > 1900 else pgn
+        await msg.edit(content=f"✅ **PGN récupéré :**\n```\n{pgn_short}\n```\n*Utilisez `!cam` pour voir la vidéo de l'opération.*")
+    except ScrapingError as e:
+        await msg.edit(content="❌ Erreur lors du scraping.")
+        if e.video_path:
+            last_video_paths[ctx.channel.id] = e.video_path
+            await ctx.send("🎥 Voici la vidéo de la session échouée :", file=discord.File(e.video_path, "debug_video.webm"))
+        else:
+            await ctx.send("❌ Aucun enregistrement vidéo disponible.")
 
-    video_path = last_video_paths.get(ctx.channel.id)
-    if video_path and Path(video_path).exists():
-        await ctx.send("📹 Vidéo sauvegardée :", file=discord.File(video_path, "debug_video.webm"))
-    else:
-        await ctx.send("❌ Aucune vidéo disponible.")
-    
-    active_tasks.pop(ctx.channel.id, None)
-
+# --- COMMANDE !cam ---
 @bot.command(name="cam")
-async def cam(ctx):
-    video_path = last_video_paths.get(ctx.channel.id)
-    if not video_path or not Path(video_path).exists():
-        return await ctx.send("❌ Aucune vidéo trouvée.")
-    file = Path(video_path)
-    if file.stat().st_size < DISCORD_FILE_LIMIT_BYTES:
-        await ctx.send("📹 Voici la vidéo :", file=discord.File(str(file), "debug_video.webm"))
+async def send_last_video(ctx):
+    video_path_str = last_video_paths.get(ctx.channel.id)
+    if not video_path_str:
+        return await ctx.send("❌ Aucune vidéo récente trouvée.")
+    
+    video_file = Path(video_path_str)
+    if not video_file.exists():
+        return await ctx.send("❌ Fichier vidéo introuvable.")
+    
+    if video_file.stat().st_size < DISCORD_FILE_LIMIT_BYTES:
+        await ctx.send("📹 Voici la vidéo de la dernière opération :", file=discord.File(str(video_file), "debug_video.webm"))
     else:
-        await ctx.send(f"📦 Vidéo trop lourde ({file.stat().st_size / 1_000_000:.2f} Mo).")
+        await ctx.send(f"📦 Vidéo trop lourde ({video_file.stat().st_size / 1_000_000:.2f} Mo).")
 
+# --- COMMANDE !ping ---
 @bot.command(name="ping")
 async def ping(ctx):
-    await ctx.send(f"Pong! {round(bot.latency * 1000)} ms")
+    await ctx.send(f"Pong! Latence : {round(bot.latency * 1000)}ms")
 
-@bot.command(name="aide")
-async def aide(ctx):
-    await ctx.send("""📖 **Commandes disponibles :**
-`!chess <url>` – Analyse en direct d’une partie Chess.com
-`!cam` – Envoie la vidéo de la dernière session
-`!stop` – Stoppe l’analyse en cours et envoie la vidéo
-`!ping` – Latence du bot
-`!aide` – Affiche ce message
-""")
-
+# --- ÉVÉNEMENT : prêt ---
 @bot.event
 async def on_ready():
-    print(f"✅ Connecté en tant que {bot.user}")
+    print(f"✅ Connecté en tant que {bot.user}.")
 
+# --- LANCEMENT ---
 async def main():
     async with bot:
         await bot.start(DISCORD_TOKEN)
@@ -103,4 +132,4 @@ if __name__ == "__main__":
     try:
         asyncio.run(main())
     except KeyboardInterrupt:
-        print("🛑 Bot arrêté.")
+        print("\n🛑 Bot arrêté.")
