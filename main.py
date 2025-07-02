@@ -53,12 +53,20 @@ async def get_pgn_from_chess_com(url: str, username: str, password: str) -> (str
             await page.wait_for_url("**/home", timeout=15000)
             await page.goto(url, timeout=90000)
 
-            await page.locator("button.share-button-component").click(timeout=30000)
-            await page.locator('div.share-menu-tab-component-header:has-text("PGN")').click(timeout=20000)
-            pgn_text = await page.input_value('textarea.share-menu-tab-pgn-textarea', timeout=20000)
+            # Cliquez sur le bouton "Share" (Partager)
+            await page.get_by_role("button", name="Share").click(timeout=15000)
+
+            # Attendez que l’onglet PGN soit visible, puis cliquez dessus
+            await page.get_by_role("tab", name="PGN").wait_for(timeout=10000)
+            await page.get_by_role("tab", name="PGN").click(timeout=5000)
+
+            # Pause légère le temps que le champ se remplisse
+            await page.wait_for_timeout(1000)
+
+            # Récupération du texte PGN
+            pgn_text = await page.locator('textarea.share-menu-tab-pgn-textarea').input_value(timeout=10000)
 
             video_path = await page.video.path()
-
             await context.close()
             await browser.close()
 
