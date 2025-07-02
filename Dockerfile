@@ -7,9 +7,9 @@ RUN apt-get update && apt-get install -y \
     --no-install-recommends && \
     apt-get clean && rm -rf /var/lib/apt/lists/*
 
-# Télécharger et installer une version compatible de ChromeDriver
-# Note: L'URL officielle est recommandée pour la stabilité
-RUN curl -sSLo chromedriver.zip https://storage.googleapis.com/chrome-for-testing-public/126.0.6478.126/linux64/chromedriver-linux64.zip && \
+# Télécharger et installer ChromeDriver
+# MISE À JOUR ICI pour correspondre à la version 138 du navigateur
+RUN curl -sSLo chromedriver.zip https://storage.googleapis.com/chrome-for-testing-public/138.0.7204.49/linux64/chromedriver-linux64.zip && \
     unzip chromedriver.zip && \
     mv chromedriver-linux64/chromedriver /usr/local/bin/chromedriver && \
     chmod +x /usr/local/bin/chromedriver && \
