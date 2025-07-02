@@ -1,10 +1,9 @@
 FROM python:3.12-slim
 
-# Installer Chromium, Chromedriver, ffmpeg, xvfb et dépendances nécessaires
+# Installer Chromium, ffmpeg, xvfb, et dépendances
 RUN apt-get update && apt-get install -y \
-    chromium-driver chromium \
+    chromium ffmpeg xvfb \
     wget unzip curl gnupg \
-    ffmpeg xvfb \
     libglib2.0-0 libnss3 libgconf-2-4 libfontconfig1 \
     libx11-xcb1 libxcomposite1 libxcursor1 libxdamage1 \
     libxrandr2 libasound2 libatk1.0-0 libatk-bridge2.0-0 \
@@ -12,18 +11,28 @@ RUN apt-get update && apt-get install -y \
     --no-install-recommends && \
     apt-get clean && rm -rf /var/lib/apt/lists/*
 
-# Variables d’environnement pour Selenium + Chromium
+# ⚠️ Supprimer chromium-driver (obsolète et incompatible)
+# Télécharger manuellement ChromeDriver 138 (pour Chromium 138)
+RUN curl -sSLo chromedriver.zip https://storage.googleapis.com/chrome-for-testing-public/138.0.7204.49/linux64/chromedriver-linux64.zip && \
+    unzip chromedriver.zip && \
+    mv chromedriver-linux64/chromedriver /usr/local/bin/chromedriver && \
+    chmod +x /usr/local/bin/chromedriver && \
+    rm -rf chromedriver.zip chromedriver-linux64
+
+# Variables d’environnement
 ENV CHROME_BIN=/usr/bin/chromium \
-    CHROMEDRIVER_PATH=/usr/bin/chromedriver \
+    CHROMEDRIVER_PATH=/usr/local/bin/chromedriver \
     PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     DISPLAY=:99
 
 WORKDIR /app
 
+# Installer les dépendances Python
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
+# Copier le code source
 COPY . .
 
 CMD ["python", "main.py"]
