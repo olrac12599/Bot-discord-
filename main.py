@@ -16,9 +16,10 @@ from selenium.webdriver.support import expected_conditions as EC
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
 CHESS_USERNAME = os.getenv("CHESS_USERNAME")
 CHESS_PASSWORD = os.getenv("CHESS_PASSWORD")
+PROXY_SERVER = os.getenv("PROXY_SERVER") # Récupère le proxy depuis les variables d'env
 
 if not all([DISCORD_TOKEN, CHESS_USERNAME, CHESS_PASSWORD]):
-    raise ValueError("❌ Variables d'environnement manquantes.")
+    raise ValueError("❌ Des variables d'environnement (DISCORD_TOKEN, CHESS_USERNAME, CHESS_PASSWORD) sont manquantes.")
 
 # --- DISCORD BOT ---
 intents = discord.Intents.default()
@@ -32,28 +33,31 @@ def capture_on_error(driver, label="error"):
         driver.save_screenshot(filename)
         return filename
     except Exception as e:
-        print(f"❌ Screenshot failed: {e}")
+        print(f"❌ La capture du screenshot a échoué : {e}")
         return None
 
-# --- ANALYSE LICHESS LIVE ---
+# --- ANALYSE LICHESS LIVE (Fonction non utilisée pour Chess.com, conservée de ton code) ---
 async def analyze_game_live(ctx, driver, game_id):
     await ctx.send(f"🔍 Analyse en direct lancée pour `{game_id}`.")
     try:
         while True:
             await asyncio.sleep(10)
-            status = driver.execute_script("return window.liveGame?.status || null;")
+            # Cette partie est spécifique à une certaine structure de page et peut nécessiter une adaptation
+            status_script = "return window.liveGame?.status || null;"
+            status = driver.execute_script(status_script)
             if status and status.lower() != "playing":
                 await ctx.send(f"🏁 Partie terminée (statut : `{status}`)")
                 break
 
-            fen = driver.execute_script("return window.liveGame?.fen || null;")
+            fen_script = "return window.liveGame?.fen || null;"
+            fen = driver.execute_script(fen_script)
             if not fen:
-                await ctx.send("⚠️ FEN non dispo. Nouvelle tentative dans 10s...")
+                await ctx.send("⚠️ FEN non disponible. Nouvelle tentative dans 10s...")
                 continue
 
             res = requests.get("https://lichess.org/api/cloud-eval", params={"fen": fen, "multiPv": 1})
             if res.status_code != 200:
-                await ctx.send("❌ Lichess ne répond pas.")
+                await ctx.send("❌ L'API de Lichess ne répond pas.")
                 continue
 
             data = res.json()
@@ -63,8 +67,9 @@ async def analyze_game_live(ctx, driver, game_id):
             mate = eval_info.get("mate")
             eval_str = f"Mat en {mate}" if mate else f"{cp / 100:.2f}" if cp else "Inconnue"
             await ctx.send(f"♟️ Coup suggéré : `{move}` | Éval : `{eval_str}`")
+
     except Exception as e:
-        await ctx.send(f"🚨 Erreur analyse : {e}")
+        await ctx.send(f"🚨 Erreur durant l'analyse : {e}")
 
 # --- VIDÉO & DRIVER SETUP ---
 def record_chess_video(game_id):
@@ -76,32 +81,27 @@ def record_chess_video(game_id):
     time.sleep(1)
 
     options = uc.ChromeOptions()
-    options.binary_location = "/usr/bin/chromium"
-    options.add_argument("--headless=new")
     options.add_argument("--no-sandbox")
     options.add_argument("--disable-dev-shm-usage")
     options.add_argument("--disable-gpu")
     options.add_argument("--window-size=1920,1080")
     options.add_argument("--lang=en-US")
     options.add_argument("--mute-audio")
-    options.add_argument("--disable-blink-features=AutomationControlled")
+    
+    # --- AJOUT DU PROXY (RECOMMANDÉ) ---
+    # Assure-toi d'avoir défini la variable d'environnement PROXY_SERVER
+    # Format : "http://user:password@host:port"
+    if PROXY_SERVER:
+        print("[ℹ️] Utilisation du serveur proxy configuré.")
+        options.add_argument(f'--proxy-server={PROXY_SERVER}')
+    else:
+        print("[⚠️] Aucun serveur proxy configuré.")
 
     ffmpeg = None
     driver = None
 
     try:
-        driver = uc.Chrome(
-            headless=True,
-            options=options,
-            use_subprocess=True,
-            driver_executable_path="/usr/local/bin/chromedriver"
-        )
-
-        # Masquer webdriver JS fingerprint
-        driver.execute_cdp_cmd("Page.addScriptToEvaluateOnNewDocument", {
-            "source": "Object.defineProperty(navigator, 'webdriver', {get: () => undefined})"
-        })
-
+        driver = uc.Chrome(options=options)
         wait = WebDriverWait(driver, 20)
 
         ffmpeg = subprocess.Popen([
@@ -112,15 +112,22 @@ def record_chess_video(game_id):
 
         driver.get("https://www.chess.com/login_and_go")
 
-        # Cookies / Pop-up
+        # --- TENTATIVE DE GESTION DU CHALLENGE CLOUDFLARE ---
         try:
-            accept = WebDriverWait(driver, 10).until(
-                EC.element_to_be_clickable((By.XPATH, "//button[contains(text(), 'Accept')]"))
+            print("[⏳] Recherche d'un challenge Cloudflare...")
+            iframe = WebDriverWait(driver, 10).until(
+                EC.presence_of_element_located((By.CSS_SELECTOR, "iframe[title='Widget containing a Cloudflare security challenge']"))
             )
-            accept.click()
-            time.sleep(1)
-        except:
-            pass
+            driver.switch_to.frame(iframe)
+            checkbox = WebDriverWait(driver, 10).until(
+                EC.element_to_be_clickable((By.ID, "cf-stage-human-check"))
+            )
+            checkbox.click()
+            print("[✅] Clic sur la case de vérification Cloudflare.")
+            driver.switch_to.default_content()
+            time.sleep(5)
+        except Exception:
+            print("[ℹ️] Pas de challenge Cloudflare détecté ou impossible à cliquer.")
 
         # Connexion
         username_input = wait.until(
@@ -162,32 +169,34 @@ def record_chess_video(game_id):
 @bot.command(name="videochess")
 async def videochess(ctx, game_id: str):
     if not game_id.isdigit():
-        await ctx.send("❌ L'ID doit être un numéro.")
+        await ctx.send("❌ L'ID de la partie doit être un numéro.")
         return
 
-    await ctx.send(f"🎥 Enregistrement pour `{game_id}`...")
+    await ctx.send(f"🎥 Lancement de l'enregistrement pour la partie `{game_id}`...")
     try:
+        # On ne garde pas le driver actif pour l'analyse, car la fonction d'analyse est pour Lichess
         video_file, screenshot, driver = await asyncio.to_thread(record_chess_video, game_id)
 
         if driver:
-            await analyze_game_live(ctx, driver, game_id)
+            # Si tu veux utiliser la fonction `analyze_game_live` plus tard, le driver est ici.
+            # Pour l'instant, on le ferme simplement.
             driver.quit()
 
         if video_file and os.path.exists(video_file):
             if os.path.getsize(video_file) < 8 * 1024 * 1024:
                 await ctx.send("✅ Enregistrement terminé :", file=discord.File(video_file))
             else:
-                await ctx.send("⚠️ Vidéo trop lourde (>8MB).")
+                await ctx.send("⚠️ La vidéo est trop lourde pour Discord (>8MB).")
             os.remove(video_file)
         else:
             await ctx.send("❌ La vidéo n’a pas pu être générée.")
 
         if screenshot and os.path.exists(screenshot):
-            await ctx.send("🖼️ Screenshot capturé :", file=discord.File(screenshot))
+            await ctx.send("🖼️ Un screenshot a été capturé durant l'erreur :", file=discord.File(screenshot))
             os.remove(screenshot)
 
     except Exception as e:
-        await ctx.send(f"🚨 Erreur : {e}")
+        await ctx.send(f"🚨 Erreur critique lors de l'exécution de la commande : {e}")
         traceback.print_exc()
 
 # --- PING ---
@@ -199,7 +208,7 @@ async def ping(ctx):
 @bot.event
 async def on_ready():
     print(f"✅ Connecté en tant que {bot.user}")
-    print("🤖 Prêt à recevoir des commandes.")
+    print("🤖 Le bot est prêt à recevoir des commandes.")
 
 # --- MAIN ---
 async def main():
