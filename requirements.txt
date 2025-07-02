@@ -1,8 +1,4 @@
-discord.py
-python-dotenv
-selenium
-chromedriver-autoinstaller
-mss
-opencv-python
-numpy
-moviepy
+
+discord.py>=2.3.2
+playwright>=1.44.0
+playwright-stealth>=1.0.6
