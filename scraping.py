@@ -50,7 +50,13 @@ async def get_pgn_from_chess_com(url, username, password, discord_channel):
 
             for _ in range(60):
                 await asyncio.sleep(10)
+
+                # Si l'utilisateur tape !stop
                 if asyncio.current_task().cancelled():
+                    try:
+                        video_path = await page.video.path()
+                    except:
+                        video_path = None
                     break
 
                 current_fen = await get_fen_from_page(page)
@@ -67,6 +73,7 @@ async def get_pgn_from_chess_com(url, username, password, discord_channel):
 
                 last_fen = current_fen
 
+            # Récupération du PGN
             await page.locator("button.share-button-component").click(timeout=30000)
             await page.locator('div.share-menu-tab-component-header:has-text("PGN")').click(timeout=20000)
             pgn = await page.input_value('textarea.share-menu-tab-pgn-textarea')
@@ -80,7 +87,7 @@ async def get_pgn_from_chess_com(url, username, password, discord_channel):
             try:
                 video_path = await page.video.path()
             except:
-                pass
+                video_path = None
             await context.close()
             await browser.close()
             raise ScrapingError(str(e), video_path=video_path)
