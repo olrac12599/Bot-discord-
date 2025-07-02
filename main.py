@@ -12,7 +12,6 @@ from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.chrome.service import Service
-from webdriver_manager.chrome import ChromeDriverManager
 
 # --- CONFIGURATION DES VARIABLES D'ENVIRONNEMENT ---
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
@@ -82,6 +81,7 @@ def record_chess_video(game_id):
     time.sleep(1)
 
     chrome_options = webdriver.ChromeOptions()
+    chrome_options.binary_location = "/usr/bin/chromium"  # Railway Chromium
     chrome_options.add_argument("--no-sandbox")
     chrome_options.add_argument("--disable-dev-shm-usage")
     chrome_options.add_argument("--disable-gpu")
@@ -103,7 +103,7 @@ def record_chess_video(game_id):
     ffmpeg = None
 
     try:
-        service = Service(ChromeDriverManager().install())
+        service = Service("/usr/local/bin/chromedriver")  # Custom driver
         driver = webdriver.Chrome(service=service, options=chrome_options)
         wait = WebDriverWait(driver, 20)
 
