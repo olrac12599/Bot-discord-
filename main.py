@@ -5,12 +5,6 @@ import discord
 from discord.ext import commands
 from playwright.async_api import async_playwright
 
-# ⛔️ Ne mets plus: from playwright_stealth import Stealth
-
-async def launch():
-    async with async_playwright() as p:
-        browser = await p.chromium.launch(headless=False)
-        # ...
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
 CHESS_USERNAME = os.getenv("CHESS_USERNAME")
 CHESS_PASSWORD = os.getenv("CHESS_PASSWORD")
@@ -24,12 +18,11 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 @bot.command(name="chess")
 async def cmd_chess(ctx, url: str):
     await ctx.send("🔴 Lancement du navigateur et du live...")
-    asyncio.create_task(launch_browser(ctx.channel.id, url))  # ne bloque pas
-    await ctx.send("🎥 Live disponible ici : **`/live`** (ou lien Railway)\n⚠️ Active pendant 5 minutes.")
+    asyncio.create_task(launch_browser(ctx.channel.id, url))
+    await ctx.send("🎥 Live disponible ici : **`/live`** (ou lien Railway)\n⚠️ Active pendant 2 minutes.")
 
 async def launch_browser(channel_id: int, url: str):
-    stealth = Stealth()
-    async with stealth.use_async(async_playwright()) as p:
+    async with async_playwright() as p:
         browser = await p.chromium.launch(
             headless=False,
             args=[
@@ -51,7 +44,7 @@ async def launch_browser(channel_id: int, url: str):
             await page.goto("https://www.chess.com/login_and_go", timeout=60000)
             await page.wait_for_timeout(5000)
             await page.goto(url, timeout=60000)
-            await page.wait_for_timeout(120000)  # laisser 2 min de visualisation
+            await page.wait_for_timeout(120000)  # laisser 2 min pour observer
         except Exception as e:
             print("[Erreur navigateur]:", e)
 
