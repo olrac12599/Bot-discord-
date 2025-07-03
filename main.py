@@ -5,24 +5,23 @@ import discord
 from discord.ext import commands
 from playwright.async_api import async_playwright
 
-# Config
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
 CHESS_USERNAME = os.getenv("CHESS_USERNAME")
 CHESS_PASSWORD = os.getenv("CHESS_PASSWORD")
-PUBLIC_VNC_URL = "https://worker-production-22ad.up.railway.app/vnc_lite.html"
+
+VNC_PUBLIC_URL = "https://worker-production-22ad.up.railway.app/vnc_lite.html"
 
 active_sessions = {}
 
-# Discord bot
 intents = discord.Intents.default()
 intents.message_content = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 
 @bot.command(name="chess")
-async def chess_command(ctx, url: str):
-    await ctx.send("🔴 Lancement du navigateur et du live...")
+async def cmd_chess(ctx, url: str):
+    await ctx.send("🟢 Lancement du navigateur et du live...")
     asyncio.create_task(launch_browser(ctx.channel.id, url))
-    await ctx.send(f"🎥 Live disponible ici : {PUBLIC_VNC_URL} (valable ~5 minutes)")
+    await ctx.send(f"🎥 Live en cours ici : {VNC_PUBLIC_URL}\n⚠️ Actif ~5 minutes.")
 
 async def launch_browser(channel_id: int, url: str):
     async with async_playwright() as p:
@@ -45,18 +44,18 @@ async def launch_browser(channel_id: int, url: str):
 
         try:
             await page.goto("https://www.chess.com/login_and_go", timeout=60000)
-            await page.wait_for_timeout(3000)
+            await page.wait_for_timeout(2000)
 
-            await page.get_by_placeholder("Username, Phone, or Email").type(CHESS_USERNAME, delay=50)
-            await page.get_by_placeholder("Password").type(CHESS_PASSWORD, delay=50)
+            await page.get_by_placeholder("Username, Phone, or Email").fill(CHESS_USERNAME)
+            await page.get_by_placeholder("Password").fill(CHESS_PASSWORD)
             await page.get_by_role("button", name="Log In").click()
             await page.wait_for_url("**/home", timeout=15000)
 
             await page.goto(url, timeout=60000)
-            await page.wait_for_timeout(120000)  # Laisse le live actif 2 min
+            await page.wait_for_timeout(120000)  # Laisse visible 2 min
 
         except Exception as e:
-            print(f"[❌ ERREUR] {e}")
+            print(f"[Erreur navigateur] : {e}")
 
         await context.close()
         await browser.close()
