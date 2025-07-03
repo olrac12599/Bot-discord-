@@ -2,4 +2,5 @@ PyNaCl
 discord.py
 playwright
 playwright-stealth
-aiohttp
+aiohtt
+flask
