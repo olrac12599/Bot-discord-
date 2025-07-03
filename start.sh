@@ -8,12 +8,11 @@ sleep 2
 x11vnc -display :0 -forever -nopw -shared -bg
 sleep 2
 
-# 3. Lancer noVNC
-./noVNC/utils/launch.sh --vnc localhost:5900 --listen 8080 &
+# 3. Lancer noVNC en écoutant sur le port de Railway ($PORT)
+# Le script launch.sh sert aussi les fichiers web (vnc_lite.html, etc.).
+./noVNC/utils/launch.sh --vnc localhost:5900 --listen "$PORT" &
 sleep 2
 
-# 4. Lancer le serveur web Flask (en fond)
-python3 web_server.py &
-
-# 5. Lancer le bot Discord
+# 4. Lancer le bot Discord (processus principal)
+echo "Lancement du bot Discord..."
 python3 main.py
