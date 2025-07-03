@@ -4,8 +4,13 @@ from pathlib import Path
 import discord
 from discord.ext import commands
 from playwright.async_api import async_playwright
-from playwright_stealth import Stealth
 
+# ⛔️ Ne mets plus: from playwright_stealth import Stealth
+
+async def launch():
+    async with async_playwright() as p:
+        browser = await p.chromium.launch(headless=False)
+        # ...
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
 CHESS_USERNAME = os.getenv("CHESS_USERNAME")
 CHESS_PASSWORD = os.getenv("CHESS_PASSWORD")
