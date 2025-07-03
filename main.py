@@ -1,30 +1,28 @@
 import os
-import io
 import asyncio
 from pathlib import Path
 import discord
 from discord.ext import commands
-from playwright.async_api import async_playwright, TimeoutError as PlaywrightTimeoutError
+from playwright.async_api import async_playwright
 from playwright_stealth import Stealth
 
-# --- CONFIGURATION ---
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
 CHESS_USERNAME = os.getenv("CHESS_USERNAME")
 CHESS_PASSWORD = os.getenv("CHESS_PASSWORD")
-DISCORD_FILE_LIMIT_BYTES = 8 * 1024 * 1024  # 8 Mo
 
-videos_dir = Path("videos")
-videos_dir.mkdir(exist_ok=True)
-last_video_paths = {}
 active_sessions = {}
 
-class ScrapingError(Exception):
-    def __init__(self, message, video_path=None):
-        super().__init__(message)
-        self.video_path = video_path
+intents = discord.Intents.default()
+intents.message_content = True
+bot = commands.Bot(command_prefix="!", intents=intents)
 
-# --- SCRAPING ---
-async def get_pgn_from_chess_com(url: str, username: str, password: str, channel_id: int):
+@bot.command(name="chess")
+async def cmd_chess(ctx, url: str):
+    await ctx.send("🔴 Lancement du navigateur et du live...")
+    asyncio.create_task(launch_browser(ctx.channel.id, url))  # ne bloque pas
+    await ctx.send("🎥 Live disponible ici : **`/live`** (ou lien Railway)\n⚠️ Active pendant 5 minutes.")
+
+async def launch_browser(channel_id: int, url: str):
     stealth = Stealth()
     async with stealth.use_async(async_playwright()) as p:
         browser = await p.chromium.launch(
@@ -38,111 +36,23 @@ async def get_pgn_from_chess_com(url: str, username: str, password: str, channel
                 '--display=:0'
             ]
         )
-
         context = await browser.new_context(
-            viewport={"width": 1280, "height": 720},
-            record_video_dir=str(videos_dir),
-            record_video_size={"width": 1280, "height": 720}
+            viewport={"width": 1280, "height": 720}
         )
-
         page = await context.new_page()
-        await page.goto("https://www.google.com")  # pour initialiser l'enregistrement
-
-        # Enregistrer la session dans l’état actif
-        active_sessions[channel_id] = {
-            "page": page,
-            "context": context,
-            "browser": browser
-        }
+        active_sessions[channel_id] = {"page": page, "context": context, "browser": browser}
 
         try:
-            await page.goto("https://www.chess.com/login_and_go", timeout=90000)
-            await page.wait_for_load_state('domcontentloaded')
-
-            try:
-                await page.get_by_role("button", name="I Accept").click(timeout=3000)
-            except PlaywrightTimeoutError:
-                pass
-
-            await page.get_by_placeholder("Username, Phone, or Email").type(username, delay=50)
-            await page.get_by_placeholder("Password").type(password, delay=50)
-            await page.get_by_role("button", name="Log In").click()
-            await page.wait_for_url("**/home", timeout=15000)
-
-            await page.goto(url, timeout=90000)
-            await page.wait_for_timeout(2000)
-
-            await page.get_by_role("button", name="Share").click(timeout=20000)
-            await page.wait_for_timeout(1000)
-            await page.get_by_role("tab", name="PGN").click(timeout=15000)
-            await page.wait_for_timeout(1000)
-            pgn_text = await page.locator('textarea.share-menu-tab-pgn-textarea').input_value(timeout=15000)
-
-            # ⚠️ On ne ferme pas context/browser ici pour permettre !vidéo
-            return pgn_text, None
-
+            await page.goto("https://www.chess.com/login_and_go", timeout=60000)
+            await page.wait_for_timeout(5000)
+            await page.goto(url, timeout=60000)
+            await page.wait_for_timeout(120000)  # laisser 2 min de visualisation
         except Exception as e:
-            try:
-                video_path = await page.video.path()
-                last_video_paths[channel_id] = video_path
-            except Exception:
-                video_path = None
-            await context.close()
-            await browser.close()
-            active_sessions.pop(channel_id, None)
-            raise ScrapingError(str(e), video_path=video_path)
+            print("[Erreur navigateur]:", e)
 
-# --- BOT DISCORD ---
-intents = discord.Intents.default()
-intents.message_content = True
-bot = commands.Bot(command_prefix="!", intents=intents)
-
-@bot.command(name="chess")
-async def get_chess_pgn(ctx, url: str):
-    msg = await ctx.send("🕵️ Connexion à Chess.com et enregistrement vidéo en cours...")
-    try:
-        pgn, _ = await get_pgn_from_chess_com(url, CHESS_USERNAME, CHESS_PASSWORD, ctx.channel.id)
-        pgn_short = (pgn[:1900] + "...") if len(pgn) > 1900 else pgn
-        await msg.edit(content=f"✅ **PGN récupéré :**\n```\n{pgn_short}\n```\n*Utilisez `!cam` ou `!vidéo` pour voir l'enregistrement.*")
-    except ScrapingError as e:
-        await msg.edit(content="❌ Erreur lors du scraping.")
-        if e.video_path:
-            await ctx.send("🎥 Voici la vidéo de la session échouée :", file=discord.File(e.video_path, "debug_video.webm"))
-        else:
-            await ctx.send("❌ Aucun enregistrement vidéo disponible.")
-
-@bot.command(name="cam")
-async def send_last_video(ctx):
-    video_path = last_video_paths.get(ctx.channel.id)
-    if not video_path or not Path(video_path).exists():
-        return await ctx.send("❌ Aucune vidéo récente trouvée.")
-    if Path(video_path).stat().st_size < DISCORD_FILE_LIMIT_BYTES:
-        await ctx.send("📹 Voici la vidéo de la dernière opération :", file=discord.File(video_path, "debug_video.webm"))
-    else:
-        await ctx.send(f"📦 Vidéo trop lourde ({Path(video_path).stat().st_size / 1_000_000:.2f} Mo).")
-
-@bot.command(name="vidéo")
-async def force_stop_recording(ctx):
-    session = active_sessions.get(ctx.channel.id)
-    if not session:
-        return await ctx.send("❌ Aucune session d'enregistrement active pour ce salon.")
-
-    page = session["page"]
-    context = session["context"]
-    browser = session["browser"]
-
-    try:
-        video_path = await page.video.path()
-        last_video_paths[ctx.channel.id] = video_path
         await context.close()
         await browser.close()
-        active_sessions.pop(ctx.channel.id, None)
-        if Path(video_path).stat().st_size < DISCORD_FILE_LIMIT_BYTES:
-            await ctx.send("📥 Enregistrement vidéo terminé :", file=discord.File(video_path, "debug_video.webm"))
-        else:
-            await ctx.send(f"📦 Vidéo trop lourde ({Path(video_path).stat().st_size / 1_000_000:.2f} Mo).")
-    except Exception as e:
-        await ctx.send(f"❌ Erreur lors de l'arrêt de l'enregistrement : {e}")
+        active_sessions.pop(channel_id, None)
 
 @bot.command(name="ping")
 async def ping(ctx):
@@ -150,14 +60,11 @@ async def ping(ctx):
 
 @bot.event
 async def on_ready():
-    print(f"✅ Connecté en tant que {bot.user}.")
+    print(f"✅ Connecté en tant que {bot.user}")
 
 async def main():
     async with bot:
         await bot.start(DISCORD_TOKEN)
 
 if __name__ == "__main__":
-    try:
-        asyncio.run(main())
-    except KeyboardInterrupt:
-        print("\n🛑 Bot arrêté.")
+    asyncio.run(main())
