@@ -1,3 +1,4 @@
+# main.py
 import os
 import asyncio
 from pathlib import Path
@@ -9,7 +10,9 @@ DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
 CHESS_USERNAME = os.getenv("CHESS_USERNAME")
 CHESS_PASSWORD = os.getenv("CHESS_PASSWORD")
 
-VNC_PUBLIC_URL = "https://worker-production-22ad.up.railway.app/vnc_lite.html"
+# Utiliser la variable d'environnement de Railway pour construire l'URL
+RAILWAY_DOMAIN = os.getenv("RAILWAY_PUBLIC_DOMAIN")
+VNC_PUBLIC_URL = f"https://{RAILWAY_DOMAIN}/vnc_lite.html" if RAILWAY_DOMAIN else "L'URL du live n'a pas pu être déterminée."
 
 active_sessions = {}
 
@@ -56,10 +59,12 @@ async def launch_browser(channel_id: int, url: str):
 
         except Exception as e:
             print(f"[Erreur navigateur] : {e}")
+        finally:
+            await context.close()
+            await browser.close()
+            active_sessions.pop(channel_id, None)
+            print(f"Session pour le canal {channel_id} terminée.")
 
-        await context.close()
-        await browser.close()
-        active_sessions.pop(channel_id, None)
 
 @bot.command(name="ping")
 async def ping(ctx):
@@ -75,3 +80,4 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+
