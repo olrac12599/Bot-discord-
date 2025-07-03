@@ -1,4 +1,6 @@
+# requirements.txt
 discord.py==2.3.2
-flask==2.3.3
 playwright==1.44.0
 playwright-stealth==1.0.6
+websockify>=0.10.0
+numpy
