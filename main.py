@@ -21,7 +21,8 @@ import cairosvg
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN") or "VOTRE_TOKEN_DISCORD_ICI"
 COMMAND_PREFIX = "!"
 # Utilise un dossier plus persistant que /tmp
-WORK_DIR = Path.home() / ".stockfish_bot"
+# Ligne corrigée
+WORK_DIR = Path("/tmp/stockfish_bot")
 ENGINE_BIN = WORK_DIR / "stockfish_bin"
 
 # --- DISCORD SETUP ---
