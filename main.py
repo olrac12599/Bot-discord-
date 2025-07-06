@@ -1,8 +1,3 @@
-
-DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
-# Pas besoin de chemin pour Stockfish, la bibliothèque s'en occupe !
-
-
 import discord
 from discord.ext import commands
 import chess
@@ -11,6 +6,9 @@ from stockfish import Stockfish
 import io
 import cairosvg
 import os
+
+DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
+# Pas besoin de chemin pour Stockfish, la bibl
 
 # Initialisation de Stockfish
 # La bibliothèque va télécharger une version compatible automatiquement.
