@@ -1,10 +1,15 @@
 import os
 import asyncio
+import discord
 from discord.ext import commands
 from playwright.async_api import async_playwright
 from dotenv import load_dotenv
 
 load_dotenv()
+
+intents = discord.Intents.default()
+intents.message_content = True
+bot = commands.Bot(command_prefix="!", intents=intents)
 
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
 INSTAGRAM_USERNAME = os.getenv("INSTAGRAM_USERNAME")
