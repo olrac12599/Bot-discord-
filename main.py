@@ -1,11 +1,12 @@
 import os
 import discord
 from discord.ext import commands
-from selenium import webdriver
-from selenium.webdriver.chrome.options import Options
-from selenium.webdriver.common.by import By
 import asyncio
 import subprocess
+import undetected_chromedriver as uc
+from selenium.webdriver.common.by import By
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
 
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
 INSTA_USERNAME = os.getenv("INSTA_USERNAME")
@@ -13,6 +14,7 @@ INSTA_PASSWORD = os.getenv("INSTA_PASSWORD")
 ACCOUNT_TO_WATCH = os.getenv("ACCOUNT_TO_WATCH")
 
 recording_process = None
+recording_path = "/tmp/insta_record.webm"
 
 intents = discord.Intents.default()
 intents.message_content = True
@@ -20,18 +22,15 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 
 def start_recording():
     global recording_process
-    output = "/tmp/insta_record.webm"
     cmd = [
-        "ffmpeg",
-        "-y",
+        "ffmpeg", "-y",
         "-video_size", "1280x720",
         "-f", "x11grab",
         "-i", ":99.0",
-        "-r", "30",
-        output
+        "-r", "25",
+        recording_path
     ]
     recording_process = subprocess.Popen(cmd)
-    return output
 
 def stop_recording():
     global recording_process
@@ -39,64 +38,59 @@ def stop_recording():
         recording_process.terminate()
         recording_process.wait()
         recording_process = None
-        return "/tmp/insta_record.webm"
+        return recording_path
     return None
 
 @bot.command()
 async def insta(ctx):
-    await ctx.send("📸 Démarrage de l'automatisation et de l'enregistrement...")
-
-    # Démarrer l'enregistrement
+    await ctx.send("📸 Lancement de l'enregistrement et de la session Instagram...")
     start_recording()
 
     try:
-        options = Options()
-        options.add_argument('--headless')
-        options.add_argument('--disable-gpu')
-        options.add_argument('--no-sandbox')
-        options.add_argument('--disable-dev-shm-usage')
-        options.add_argument('--window-size=1280,720')
-        options.add_experimental_option("excludeSwitches", ["enable-automation"])
-        options.add_experimental_option('useAutomationExtension', False)
+        options = uc.ChromeOptions()
+        options.add_argument("--headless")
+        options.add_argument("--no-sandbox")
+        options.add_argument("--disable-dev-shm-usage")
+        options.add_argument("--window-size=1280,720")
 
-        driver = webdriver.Chrome(options=options)
-        driver.execute_cdp_cmd("Page.addScriptToEvaluateOnNewDocument", {
-            "source": """
-            Object.defineProperty(navigator, 'webdriver', {
-                get: () => undefined
-            })
-            """
-        })
-
+        driver = uc.Chrome(options=options)
         driver.get("https://www.instagram.com/accounts/login/")
-        await asyncio.sleep(5)
 
-        username_field = driver.find_element(By.NAME, "username")
-        password_field = driver.find_element(By.NAME, "password")
-        username_field.send_keys(INSTA_USERNAME)
-        password_field.send_keys(INSTA_PASSWORD)
+        wait = WebDriverWait(driver, 20)
+        username_input = wait.until(EC.presence_of_element_located((By.NAME, "username")))
+        password_input = wait.until(EC.presence_of_element_located((By.NAME, "password")))
 
-        login_button = driver.find_element(By.XPATH, "//button[@type='submit']")
+        username_input.send_keys(INSTA_USERNAME)
+        password_input.send_keys(INSTA_PASSWORD)
+
+        login_button = wait.until(EC.element_to_be_clickable((By.XPATH, "//button[@type='submit']")))
         login_button.click()
 
-        await asyncio.sleep(7)
+        await asyncio.sleep(5)
 
         driver.get(f"https://www.instagram.com/{ACCOUNT_TO_WATCH}/")
-        await asyncio.sleep(15)
+        await asyncio.sleep(10)
+
+        await ctx.send("✅ Visite du compte terminée.")
 
         driver.quit()
-        await ctx.send("✅ Navigation Instagram terminée.")
 
     except Exception as e:
-        await ctx.send(f"❌ Erreur : {e}")
+        try:
+            driver.save_screenshot("/tmp/error.png")
+            await ctx.send("❌ Erreur détectée. Voici ce que le bot voyait :", file=discord.File("/tmp/error.png"))
+        except:
+            pass
+
+        await ctx.send(f"❌ Erreur : {str(e)[:1900]}")
 
 @bot.command()
 async def stop(ctx):
     path = stop_recording()
     if path and os.path.exists(path):
-        await ctx.send("🎬 Vidéo terminée :", file=discord.File(path))
+        await ctx.send("🎬 Voici la vidéo enregistrée :", file=discord.File(path))
     else:
-        await ctx.send("⚠️ Aucun enregistrement en cours.")
+        await ctx.send("⚠️ Aucun enregistrement n'était en cours.")
 
 @bot.event
 async def on_ready():
