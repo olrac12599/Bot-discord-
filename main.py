@@ -1,4 +1,4 @@
-import os
+ import os
 import discord
 import asyncio
 from discord.ext import commands
@@ -28,8 +28,8 @@ async def insta(ctx):
             page = await context.new_page()
 
             await page.goto("https://www.instagram.com/accounts/login/")
-            await page.fill('input[name="username"]', INSTA_USERNAME)
-            await page.fill('input[name="password"]', INSTA_PASSWORD)
+            await page.fill('input[name="Username, email or mobile number"]', INSTA_USERNAME)
+            await page.fill('input[name="Password"]', INSTA_PASSWORD)
             await page.click('button[type="submit"]')
             await page.wait_for_timeout(5000)
 
