@@ -5,135 +5,142 @@ import asyncio
 import time
 import subprocess
 import traceback
-import random # <-- Ajouté pour les pauses aléatoires
-from selenium import webdriver
+import random
+import undetected_chromedriver.v2 as uc
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
+from selenium.common.exceptions import WebDriverException
 
 # --- CONFIGURATION DES VARIABLES D'ENVIRONNEMENT ---
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
 INSTA_USERNAME = os.getenv("INSTA_USERNAME")
 INSTA_PASSWORD = os.getenv("INSTA_PASSWORD")
-# Compte par défaut à visiter si aucun n'est spécifié dans la commande
-DEFAULT_ACCOUNT = os.getenv("ACCOUNT_TO_WATCH", "instagram") 
+DEFAULT_ACCOUNT = os.getenv("ACCOUNT_TO_WATCH", "instagram")
 
 if not all([DISCORD_TOKEN, INSTA_USERNAME, INSTA_PASSWORD]):
-    raise ValueError("ERREUR: Des variables d'environnement (DISCORD_TOKEN, INSTA_USERNAME, INSTA_PASSWORD) sont manquantes.")
+    raise ValueError("ERREUR: Variables d'environnement manquantes.")
 
 # --- INITIALISATION DU BOT DISCORD ---
 intents = discord.Intents.default()
 intents.message_content = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 
-# --- FONCTION DE CAPTURE D'ÉCRAN EN CAS D'ERREUR ---
+# --- FONCTION DE CAPTURE D'ÉCRAN ---
 def capture_on_error(driver, label="error"):
     timestamp = int(time.time())
     filename = f"/tmp/screenshot_{label}_{timestamp}.png"
     try:
         driver.save_screenshot(filename)
-        print(f"[📸] Screenshot d'erreur capturé : {filename}")
+        print(f"[📸] Screenshot : {filename}")
         return filename
     except Exception as e:
-        print(f"[❌] La capture du screenshot a échoué : {e}")
+        print(f"[❌] Échec screenshot : {e}")
     return None
 
-# --- FONCTION D'ENREGISTREMENT VIDÉO ---
+# --- FONCTION D'ENREGISTREMENT INSTAGRAM ---
 def record_insta_session(account_to_watch):
     os.environ["DISPLAY"] = ":99"
     timestamp = int(time.time())
     video_filename = f"/tmp/insta_{account_to_watch}_{timestamp}.webm"
     screenshot_file = None
 
-    # Configuration pour le navigateur headless (sans interface graphique)
     xvfb = subprocess.Popen(["Xvfb", ":99", "-screen", "0", "1280x720x24"])
     time.sleep(1)
 
-    chrome_options = webdriver.ChromeOptions()
+    chrome_options = uc.ChromeOptions()
     chrome_options.add_argument("--no-sandbox")
     chrome_options.add_argument("--disable-dev-shm-usage")
     chrome_options.add_argument("--window-size=1280,720")
-    chrome_options.add_argument("--lang=en-US") 
-    chrome_options.add_experimental_option('prefs', {'intl.accept_languages': 'en,en_US'})
+    chrome_options.add_argument("--lang=en-US")
+    chrome_options.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36")
+    chrome_options.add_experimental_option("excludeSwitches", ["enable-automation"])
+    chrome_options.add_experimental_option("useAutomationExtension", False)
 
     driver = None
     ffmpeg = None
 
     try:
-        driver = webdriver.Chrome(options=chrome_options)
+        driver = uc.Chrome(options=chrome_options)
+        driver.execute_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
         wait = WebDriverWait(driver, 20)
 
-        # Démarrage de l'enregistrement vidéo
+        # Démarrer enregistrement vidéo
         ffmpeg = subprocess.Popen([
             "ffmpeg", "-y", "-video_size", "1280x720", "-framerate", "25",
             "-f", "x11grab", "-i", ":99.0", "-c:v", "libvpx-vp9",
             "-b:v", "1M", "-pix_fmt", "yuv420p", video_filename
         ])
 
-        # 1. Aller sur la page de connexion Instagram
-        driver.get("https://www.instagram.com/accounts/login/")
-        time.sleep(random.uniform(3, 5)) # Pause aléatoire
+        # Navigation avec gestion du 429
+        MAX_RETRIES = 3
+        RETRY_DELAY = 5
+        for attempt in range(MAX_RETRIES):
+            driver.get("https://www.instagram.com/accounts/login/")
+            time.sleep(random.uniform(3, 6))
+            if "Too Many Requests" in driver.page_source:
+                print(f"[🚫] Tentative {attempt+1}/{MAX_RETRIES} : 429 détecté.")
+                time.sleep(RETRY_DELAY * (attempt + 1))
+            else:
+                break
+        else:
+            raise Exception("Erreur 429 répétée")
 
-        # 2. Gérer le pop-up de cookies
+        # Cookies
         try:
-            print("[⏳] Recherche du pop-up de cookies...")
-            cookie_button = WebDriverWait(driver, 10).until(
-                EC.element_to_be_clickable((By.XPATH, "//button[contains(text(), 'Allow all cookies')] | //button[contains(text(), 'Allow essential and optional cookies')]"))
+            cookie_btn = WebDriverWait(driver, 10).until(
+                EC.element_to_be_clickable((By.XPATH, "//button[contains(text(), 'Allow all cookies')]"))
             )
-            cookie_button.click()
-            print("[✅] Pop-up de cookies fermé.")
+            cookie_btn.click()
             time.sleep(random.uniform(1, 2))
-        except Exception:
-            print("[ℹ️] Aucun pop-up de cookies n'a été détecté.")
+        except:
+            print("[ℹ️] Pas de pop-up cookies.")
 
-        # 3. Se connecter
-        print("[⏳] Tentative de connexion...")
+        # Login
+        print("[🔐] Connexion...")
         wait.until(EC.visibility_of_element_located((By.NAME, "username"))).send_keys(INSTA_USERNAME)
-        time.sleep(random.uniform(1, 2.5)) # Pause après avoir tapé le pseudo
-
+        time.sleep(random.uniform(1, 2))
         driver.find_element(By.NAME, "password").send_keys(INSTA_PASSWORD)
-        time.sleep(random.uniform(1, 3)) # Pause après avoir tapé le mot de passe
-        
+        time.sleep(random.uniform(1, 2.5))
         driver.find_element(By.XPATH, "//button[@type='submit']").click()
+
         wait.until(EC.presence_of_element_located((By.XPATH, "//*[contains(@href, '/direct/inbox/')]")))
-        print("[✅] Connexion réussie.")
+        print("[✅] Connecté à Instagram.")
         time.sleep(random.uniform(2, 4))
 
-        # 4. Gérer le pop-up "Enregistrer les informations de connexion"
+        # Pop-up "enregistrer infos"
         try:
-            print("[⏳] Recherche du pop-up 'Enregistrer les infos'...")
-            not_now_button = WebDriverWait(driver, 10).until(EC.element_to_be_clickable((By.XPATH, "//div[text()='Not Now'] | //button[contains(text(), 'Not Now')]")))
-            not_now_button.click()
-            print("[✅] Pop-up 'Enregistrer les infos' fermé.")
+            btn = WebDriverWait(driver, 10).until(
+                EC.element_to_be_clickable((By.XPATH, "//button[contains(text(), 'Not Now')]"))
+            )
+            btn.click()
             time.sleep(random.uniform(1, 2))
-        except Exception:
-            print("[ℹ️] Aucun pop-up 'Enregistrer les infos' n'a été détecté.")
+        except:
+            print("[ℹ️] Pas de pop-up 'infos'.")
 
-        # 5. Gérer le pop-up "Activer les notifications"
+        # Pop-up notifications
         try:
-            print("[⏳] Recherche du pop-up 'Notifications'...")
-            notif_button = WebDriverWait(driver, 10).until(EC.element_to_be_clickable((By.XPATH, "//button[contains(text(), 'Not Now')]")))
-            notif_button.click()
-            print("[✅] Pop-up 'Notifications' fermé.")
-        except Exception:
-            print("[ℹ️] Aucun pop-up de notifications n'a été détecté.")
+            notif = WebDriverWait(driver, 10).until(
+                EC.element_to_be_clickable((By.XPATH, "//button[contains(text(), 'Not Now')]"))
+            )
+            notif.click()
+            time.sleep(random.uniform(1, 2))
+        except:
+            print("[ℹ️] Pas de pop-up notif.")
 
-        # 6. Naviguer vers le profil cible
-        print(f"[➡️] Navigation vers le profil : {account_to_watch}")
+        # Aller au profil
         driver.get(f"https://www.instagram.com/{account_to_watch}/")
-        
-        wait.until(EC.presence_of_element_located((By.TAG_NAME, "h2"))) # Attendre que le nom du profil apparaisse
-        print("[✅] Le profil est chargé.")
-        time.sleep(10) # Laisse le temps d'enregistrer quelques secondes du profil
+        wait.until(EC.presence_of_element_located((By.TAG_NAME, "h2")))
+        print("[✅] Profil chargé.")
+        time.sleep(10)
 
     except Exception as e:
-        print(f"[🚨] Une erreur majeure est survenue dans Selenium : {e}")
+        print(f"[❌] Erreur principale : {e}")
         traceback.print_exc()
         if driver:
             screenshot_file = capture_on_error(driver, "insta_error")
 
     finally:
-        # Arrêter proprement tous les processus
         if ffmpeg and ffmpeg.poll() is None:
             ffmpeg.terminate()
             try:
@@ -145,17 +152,14 @@ def record_insta_session(account_to_watch):
         if xvfb:
             xvfb.terminate()
 
-    # Retourner les fichiers générés (s'ils existent)
-    video_result = video_filename if os.path.exists(video_filename) else None
-    screenshot_result = screenshot_file if screenshot_file and os.path.exists(screenshot_file) else None
-    return video_result, screenshot_result
+    return video_filename if os.path.exists(video_filename) else None, \
+           screenshot_file if screenshot_file and os.path.exists(screenshot_file) else None
 
 # --- COMMANDE DISCORD ---
 @bot.command(name="videoinsta")
 async def videoinsta(ctx, account_name: str = None):
-    target_account = account_name if account_name else DEFAULT_ACCOUNT
-        
-    await ctx.send(f"🎥 Lancement de l'enregistrement pour le profil `{target_account}`...")
+    target_account = account_name or DEFAULT_ACCOUNT
+    await ctx.send(f"🎥 Enregistrement du profil `{target_account}`...")
     try:
         video_file, screenshot = await asyncio.to_thread(record_insta_session, target_account)
 
@@ -163,31 +167,28 @@ async def videoinsta(ctx, account_name: str = None):
             if os.path.getsize(video_file) < 25 * 1024 * 1024:
                 await ctx.send("✅ Enregistrement terminé !", file=discord.File(video_file))
             else:
-                await ctx.send(f"⚠️ La vidéo a été enregistrée mais est trop lourde pour Discord (> 25MB).")
+                await ctx.send("⚠️ Vidéo trop lourde pour Discord (> 25MB).")
             os.remove(video_file)
         else:
-            await ctx.send("❌ La génération de la vidéo a échoué. Une erreur s'est produite.")
+            await ctx.send("❌ Erreur pendant l'enregistrement.")
 
         if screenshot:
-            await ctx.send("🖼️ Voici un screenshot capturé au moment de l'erreur :", file=discord.File(screenshot))
+            await ctx.send("🖼️ Screenshot lors de l'erreur :", file=discord.File(screenshot))
             os.remove(screenshot)
 
     except Exception as e:
-        await ctx.send(f"🚨 Une erreur critique est survenue : {e}")
+        await ctx.send(f"🚨 Erreur critique : {e}")
         traceback.print_exc()
 
-# --- COMMANDE PING POUR TESTER LE BOT ---
 @bot.command(name="ping")
 async def ping(ctx):
     await ctx.send(f"Pong! Latence : {round(bot.latency * 1000)}ms")
 
-# --- ÉVÉNEMENT QUAND LE BOT EST PRÊT ---
 @bot.event
 async def on_ready():
     print(f"✅ Connecté en tant que {bot.user}")
-    print("🤖 Le bot est prêt à recevoir des commandes.")
+    print("🤖 Prêt à recevoir des commandes.")
 
-# --- DÉMARRAGE DU BOT ---
 async def main():
     await bot.start(DISCORD_TOKEN)
 
