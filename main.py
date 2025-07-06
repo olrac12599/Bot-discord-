@@ -1,6 +1,12 @@
 import os, io, stat, tarfile, shutil, requests, discord, chess, chess.engine, chess.pgn
 from pathlib import Path
+from discord.ext import commands
 
+bot = commands.Bot(command_prefix="!")
+
+@bot.command()
+async def analyser(ctx, *, pgn: str):
+    await ctx.send("Analyse en cours...")  # puis ton analyse ici
 # ---- CONFIG ----
 STOCKFISH_URL = (
     "https://github.com/official-stockfish/Stockfish/"
