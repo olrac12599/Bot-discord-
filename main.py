@@ -16,6 +16,7 @@ ENGINE_BIN = WORK_DIR / "stockfish"
 
 # ---- BOT INIT ----
 intents = discord.Intents.default()
+intents.message_content = True
 bot = commands.Bot(command_prefix=COMMAND_PREFIX, intents=intents)
 
 # ---- STOCKFISH SETUP ----
@@ -34,11 +35,15 @@ def extract_stockfish(archive: Path):
     print("📂 Extraction du binaire...")
     with tarfile.open(archive, "r:") as tar:
         tar.extractall(WORK_DIR, filter="data")
+
     for f in WORK_DIR.rglob("*"):
-        if "stockfish" in f.name and os.access(f, os.X_OK):
-            shutil.copy(f, ENGINE_BIN)
+        if f.is_file() and os.access(f, os.X_OK) and "stockfish" in f.name:
+            shutil.copyfile(f, ENGINE_BIN)
             ENGINE_BIN.chmod(ENGINE_BIN.stat().st_mode | stat.S_IEXEC)
+            print(f"✅ Binaire copié depuis : {f}")
             return True
+
+    print("❌ Aucun binaire Stockfish trouvé.")
     return False
 
 def ensure_stockfish():
@@ -90,7 +95,6 @@ async def analyser(ctx, *, pgn: str):
 
         engine.quit()
 
-        # Exemple : afficher juste le 5e coup
         index = 4 if len(analyses) > 4 else len(analyses) - 1
         move, score_before, score_after = analyses[index]
 
