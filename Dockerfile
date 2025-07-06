@@ -1,29 +1,30 @@
-# Utilise une image Python 3.12 slim
+
 FROM python:3.12-slim
 
-# Met à jour et installe les dépendances système requises
+# Installer Chromium, Chromedriver, ffmpeg, xvfb et dépendances nécessaires
 RUN apt-get update && apt-get install -y \
-    ffmpeg \
-    xvfb \
-    chromium \
-    chromium-driver \
-    && rm -rf /var/lib/apt/lists/*
+    chromium-driver chromium \
+    wget unzip curl gnupg \
+    ffmpeg xvfb \
+    libglib2.0-0 libnss3 libgconf-2-4 libfontconfig1 \
+    libx11-xcb1 libxcomposite1 libxcursor1 libxdamage1 \
+    libxrandr2 libasound2 libatk1.0-0 libatk-bridge2.0-0 \
+    libcups2 libdrm2 libxkbcommon0 libgtk-3-0 xdg-utils \
+    --no-install-recommends && \
+    apt-get clean && rm -rf /var/lib/apt/lists/*
 
-# Définit l'affichage virtuel sur lequel le navigateur s'exécutera
-# Bien que l'entrypoint s'en occupe, le définir ici reste une bonne pratique
-ENV DISPLAY=:99
+# Variables d’environnement pour Selenium + Chromium
+ENV CHROME_BIN=/usr/bin/chromium \
+    CHROMEDRIVER_PATH=/usr/bin/chromedriver \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    DISPLAY=:99
 
-# Copie et installe les dépendances Python
+WORKDIR /app
+
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copie le reste de l'application
-COPY . /app
-WORKDIR /app
+COPY . .
 
-# Rendre le script d'entrée exécutable
-COPY entrypoint.sh .
-RUN chmod +x entrypoint.sh
-
-# Définir le script d'entrée comme point de lancement du conteneur
-ENTRYPOINT ["./entrypoint.sh"]
+CMD ["python", "main.py"]
