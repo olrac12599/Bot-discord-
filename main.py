@@ -1,92 +1,91 @@
 import os
-import asyncio
 import discord
+import asyncio
 from discord.ext import commands
 from playwright.async_api import async_playwright, Error as PlaywrightError
-from playwright_stealth import stealth  # ✅ Import corrigé
 
-# --- VARIABLES D'ENV ---
+# Variables Railway
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
 INSTA_USERNAME = os.getenv("INSTA_USERNAME")
 INSTA_PASSWORD = os.getenv("INSTA_PASSWORD")
 ACCOUNT_TO_WATCH = os.getenv("ACCOUNT_TO_WATCH")
 
-# --- DISCORD ---
+# Vérification des variables
+for var, name in [(DISCORD_TOKEN, "DISCORD_TOKEN"),
+                  (INSTA_USERNAME, "INSTA_USERNAME"),
+                  (INSTA_PASSWORD, "INSTA_PASSWORD"),
+                  (ACCOUNT_TO_WATCH, "ACCOUNT_TO_WATCH")]:
+    if not var:
+        print(f"❌ Erreur : {name} non défini.")
+        exit(1)
+
+# Setup bot
 intents = discord.Intents.default()
 intents.message_content = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 
-
 @bot.command()
 async def insta(ctx):
-    if not all([DISCORD_TOKEN, INSTA_USERNAME, INSTA_PASSWORD, ACCOUNT_TO_WATCH]):
-        await ctx.send("❌ Erreur : Une ou plusieurs variables d'environnement sont manquantes.")
-        return
+    await ctx.send("🔍 Lancement de l'automatisation Instagram...")
 
-    await ctx.send("🕵️ Lancement de l'automatisation Instagram...")
-
-    async with async_playwright() as p:
-        browser = None
-        try:
+    try:
+        async with async_playwright() as p:
             browser = await p.chromium.launch(
-                headless=True,
-                args=[
-                    "--no-sandbox",
-                    "--disable-setuid-sandbox",
-                    "--disable-dev-shm-usage",
-                    "--disable-gpu"
-                ]
+                headless=False,
+                args=["--no-sandbox"]
             )
-            context = await browser.new_context()
+            context = await browser.new_context(viewport={"width": 1280, "height": 720})
             page = await context.new_page()
 
-            # ✅ Appliquer le mode furtif
-            await stealth(page)
-
+            # Page login
             await page.goto("https://www.instagram.com/accounts/login/", timeout=60000)
+            await page.wait_for_selector('input[name="username"]')
+            await page.screenshot(path="/tmp/step1_login.png")
 
-            # Gérer les cookies si présents
-            try:
-                await page.locator("text=Allow all cookies, Tout autoriser").click(timeout=5000)
-                await ctx.send("🍪 Cookies acceptés.")
-            except:
-                pass
-
-            await page.wait_for_timeout(1000)
-            await page.locator('input[name="username"]').fill(INSTA_USERNAME)
-            await page.locator('input[name="password"]').fill(INSTA_PASSWORD)
-            await page.locator('button[type="submit"]').click()
+            # Login
+            await page.fill('input[name="username"]', INSTA_USERNAME)
+            await page.fill('input[name="password"]', INSTA_PASSWORD)
+            await page.screenshot(path="/tmp/step2_credentials.png")
+            await page.click('button[type="submit"]')
             await page.wait_for_timeout(7000)
+            await page.screenshot(path="/tmp/step3_loggedin.png")
 
-            # Fermer les popups
+            # Bypass popups
             try:
                 await page.locator("text=Not Now, Plus tard").click(timeout=5000)
             except:
                 pass
 
+            # Profile page
             await page.goto(f"https://www.instagram.com/{ACCOUNT_TO_WATCH}/", timeout=60000)
             await page.wait_for_load_state("networkidle")
-            await page.screenshot(path="/tmp/final_account_view.png")
+            await page.screenshot(path="/tmp/step4_account.png")
 
-            await ctx.send("✅ Visite terminée avec succès !", file=discord.File("/tmp/final_account_view.png"))
+            await browser.close()
 
-        except Exception as e:
-            await ctx.send(f"❌ Une erreur est survenue : {type(e).__name__}")
-            print("Erreur détaillée :", e)
-            if 'page' in locals() and not page.is_closed():
-                await page.screenshot(path="/tmp/error_screenshot.png")
-                await ctx.send("📸 Voici ce que le bot voyait :", file=discord.File("/tmp/error_screenshot.png"))
+            # Send images
+            files = [
+                discord.File("/tmp/step1_login.png"),
+                discord.File("/tmp/step2_credentials.png"),
+                discord.File("/tmp/step3_loggedin.png"),
+                discord.File("/tmp/step4_account.png"),
+            ]
+            await ctx.send("✅ Instagram visité. Captures d'écran :", files=files)
 
-        finally:
-            if browser:
-                await browser.close()
+    except Exception as e:
+        trg = f"❌ Erreur : {type(e).__name__} — {str(e)[:1900]}"
+        await ctx.send(trg)
+        try:
+            await page.screenshot(path="/tmp/error.png")
+            await ctx.send("📸 Aperçu de l'erreur :", file=discord.File("/tmp/error.png"))
+        except:
+            pass
+        if browser:
+            await browser.close()
 
 @bot.event
 async def on_ready():
     print(f"✅ Connecté en tant que {bot.user}")
 
 if __name__ == "__main__":
-    if DISCORD_TOKEN:
-        bot.run(DISCORD_TOKEN)
-    else:
-        print("❌ DISCORD_TOKEN manquant.")
+    bot.run(DISCORD_TOKEN)
