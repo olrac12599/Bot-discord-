@@ -2,4 +2,4 @@ python-chess
 requests
 zstandard
 stockfish
-discord.py
+discord.py>=2.3.2
