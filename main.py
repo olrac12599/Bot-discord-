@@ -11,8 +11,8 @@ from pathlib import Path
 load_dotenv()
 
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
-INSTA_USERNAME = os.getenv("INSTA_USERNAME")
-INSTA_PASSWORD = os.getenv("INSTA_PASSWORD")
+INSTA_USERNAME = os.getenv("name")
+INSTA_PASSWORD = os.getenv("mdp")
 
 bot = commands.Bot(command_prefix="!", intents=discord.Intents.default())
 
