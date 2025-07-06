@@ -3,7 +3,6 @@ import asyncio
 import discord
 from discord.ext import commands
 from playwright.async_api import async_playwright
-from dotenv import load_dotenv
 from datetime import datetime
 
 load_dotenv()
