@@ -1,39 +1,37 @@
-import os, io, stat, tarfile, shutil, requests, discord, chess, chess.engine, chess.pgn
-from pathlib import Path
+import os, io, stat, tarfile, shutil, requests
+import discord
 from discord.ext import commands
+import chess
+import chess.engine
+import chess.pgn
+from pathlib import Path
 
-bot = commands.Bot(command_prefix="!")
+# ---- CONFIGURATION ----
+TOKEN = os.getenv("DISCORD_TOKEN") or "VOTRE_TOKEN_DISCORD_ICI"
+COMMAND_PREFIX = "!"
 
-@bot.command()
-async def analyser(ctx, *, pgn: str):
-    await ctx.send("Analyse en cours...")  # puis ton analyse ici
-# ---- CONFIG ----
-STOCKFISH_URL = (
-    "https://github.com/official-stockfish/Stockfish/"
-    "releases/download/sf_17.1/stockfish-ubuntu-x86-64-avx2.tar"
-)
+STOCKFISH_URL = "https://github.com/official-stockfish/Stockfish/releases/download/sf_17.1/stockfish-ubuntu-x86-64-avx2.tar"
 WORK_DIR = Path("/tmp/stockfish")
 ENGINE_BIN = WORK_DIR / "stockfish"
 
-BOT_TOKEN = os.getenv("DISCORD_TOKEN") or "VOTRE_TOKEN_DISCORD_ICI"
+# ---- BOT INIT ----
 intents = discord.Intents.default()
-bot = discord.Bot(intents=intents)
+bot = commands.Bot(command_prefix=COMMAND_PREFIX, intents=intents)
 
-# ---- INSTALLATION DE STOCKFISH ----
+# ---- STOCKFISH SETUP ----
 def download_stockfish():
     WORK_DIR.mkdir(parents=True, exist_ok=True)
     archive = WORK_DIR / "sf.tar"
-    print(f"📥 Téléchargement : {STOCKFISH_URL}")
+    print("📥 Téléchargement de Stockfish...")
     r = requests.get(STOCKFISH_URL, stream=True, timeout=60)
     r.raise_for_status()
     with open(archive, "wb") as f:
         for chunk in r.iter_content(8192):
             f.write(chunk)
-    print(f"✅ Téléchargé : {archive.stat().st_size/1_048_576:.1f} MB")
     return archive
 
 def extract_stockfish(archive: Path):
-    print("📂 Extraction...")
+    print("📂 Extraction du binaire...")
     with tarfile.open(archive, "r:") as tar:
         tar.extractall(WORK_DIR, filter="data")
     for f in WORK_DIR.rglob("*"):
@@ -45,47 +43,19 @@ def extract_stockfish(archive: Path):
 
 def ensure_stockfish():
     if ENGINE_BIN.exists():
-        print("✅ Stockfish déjà prêt.")
         return
     archive = download_stockfish()
-    if extract_stockfish(archive):
-        print("✅ Installation terminée.")
-        archive.unlink(missing_ok=True)
-    else:
-        raise RuntimeError("❌ Stockfish introuvable après extraction.")
+    if not extract_stockfish(archive):
+        raise RuntimeError("❌ Impossible d’installer Stockfish.")
+    archive.unlink(missing_ok=True)
 
 # ---- ANALYSE PGN ----
-async def analyser_partie(pgn_text: str):
-    pgn = io.StringIO(pgn_text)
-    game = chess.pgn.read_game(pgn)
-    if game is None:
-        return None, "Le format PGN est invalide."
-
-    engine = chess.engine.SimpleEngine.popen_uci(str(ENGINE_BIN))
-    analyses = []
-    board = game.board()
-
-    for move in game.mainline_moves():
-        info_before = engine.analyse(board, chess.engine.Limit(time=0.1))
-        board.push(move)
-        info_after = engine.analyse(board, chess.engine.Limit(time=0.1))
-        analyses.append({
-            "move": move,
-            "score_before": info_before["score"],
-            "score_after": info_after["score"],
-            "best_move": info_before.get("pv")[0] if "pv" in info_before else None
-        })
-
-    engine.quit()
-    return analyses, None
-
 def get_move_quality(score_before, score_after, turn):
     pov_before = score_before.white() if turn == chess.WHITE else score_before.black()
     pov_after = score_after.white() if turn == chess.WHITE else score_after.black()
 
     if pov_before.is_mate() or pov_after.is_mate():
         return "⚡️ Coup décisif"
-
     loss = pov_before.score() - pov_after.score()
     if loss > 200:
         return "⁉️ Gaffe"
@@ -96,42 +66,55 @@ def get_move_quality(score_before, score_after, turn):
     else:
         return "✅ Bon coup"
 
-# ---- COMMANDE DISCORD ----
-@bot.slash_command(name="analyser", description="Analyse une partie d'échecs au format PGN.")
-async def analyser(ctx: discord.ApplicationContext, pgn: str):
-    await ctx.defer()
-    analyses, error = await analyser_partie(pgn)
-    if error:
-        await ctx.respond(f"❌ Erreur : {error}")
-        return
+# ---- COMMANDE !analyser ----
+@bot.command()
+async def analyser(ctx, *, pgn: str):
+    await ctx.send("🔎 Analyse en cours...")
 
-    index = 4 if len(analyses) > 4 else len(analyses) - 1
-    analyse_coup = analyses[index]
+    try:
+        pgn_io = io.StringIO(pgn)
+        game = chess.pgn.read_game(pgn_io)
+        if not game:
+            await ctx.send("❌ Format PGN invalide.")
+            return
 
-    board = chess.pgn.read_game(io.StringIO(pgn)).board()
-    for i in range(index + 1):
-        board.push(analyses[i]['move'])
+        board = game.board()
+        engine = chess.engine.SimpleEngine.popen_uci(str(ENGINE_BIN))
+        analyses = []
 
-    turn = board.turn
-    quality = get_move_quality(analyse_coup["score_before"], analyse_coup["score_after"], not turn)
-    score_cp = analyse_coup["score_after"].white().score(mate_score=10000) / 100.0
+        for move in game.mainline_moves():
+            info_before = engine.analyse(board, chess.engine.Limit(time=0.1))
+            board.push(move)
+            info_after = engine.analyse(board, chess.engine.Limit(time=0.1))
+            analyses.append((move, info_before["score"], info_after["score"]))
 
-    embed = discord.Embed(
-        title=f"Coup {index+1} : {board.san(analyse_coup['move'])}",
-        description=f"**Qualité :** {quality}\n**Évaluation :** {score_cp}",
-        color=discord.Color.blue()
-    )
+        engine.quit()
 
-    svg = chess.svg.board(board=board, lastmove=analyse_coup["move"]).encode("utf-8")
-    file = discord.File(io.BytesIO(svg), filename="board.svg")
-    await ctx.respond("Voici l’analyse du coup sélectionné :", file=file, embed=embed)
+        # Exemple : afficher juste le 5e coup
+        index = 4 if len(analyses) > 4 else len(analyses) - 1
+        move, score_before, score_after = analyses[index]
 
+        temp_board = game.board()
+        for i in range(index + 1):
+            temp_board.push(analyses[i][0])
+
+        quality = get_move_quality(score_before, score_after, not temp_board.turn)
+        score_cp = score_after.white().score(mate_score=10000) / 100.0
+
+        await ctx.send(
+            f"♟️ Coup {index + 1} : `{temp_board.san(move)}`\n"
+            f"Qualité : {quality}\n"
+            f"Évaluation après le coup : `{score_cp}`"
+        )
+
+    except Exception as e:
+        await ctx.send(f"❌ Erreur pendant l'analyse : {e}")
+
+# ---- DÉMARRAGE ----
 @bot.event
 async def on_ready():
-    print(f"✅ Connecté en tant que {bot.user}")
+    print(f"✅ Bot prêt : connecté en tant que {bot.user}")
 
-# ---- LANCEMENT ----
 if __name__ == "__main__":
     ensure_stockfish()
-    bot.run(BOT_TOKEN)
-        
+    bot.run(TOKEN)
