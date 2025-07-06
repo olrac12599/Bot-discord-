@@ -1,5 +1,8 @@
 import subprocess
 
-# Lister les fichiers installés dans /usr/bin
-files = subprocess.getoutput('ls /usr/bin')
-print(f"Fichiers dans /usr/bin : {files}")
+# Vérifier où Stockfish est installé
+stockfish_path = subprocess.getoutput('which stockfish')
+if stockfish_path:
+    print(f"Stockfish est installé dans : {stockfish_path}")
+else:
+    print("Stockfish n'est pas installé ou introuvable dans le PATH.")
