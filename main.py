@@ -1,6 +1,5 @@
 import os, io, stat, tarfile, shutil, requests, discord, chess, chess.engine, chess.pgn
 from pathlib import Path
-from discord.ext import commands
 
 # ---- CONFIG ----
 STOCKFISH_URL = (
@@ -11,8 +10,8 @@ WORK_DIR = Path("/tmp/stockfish")
 ENGINE_BIN = WORK_DIR / "stockfish"
 
 BOT_TOKEN = os.getenv("DISCORD_TOKEN") or "VOTRE_TOKEN_DISCORD_ICI"
-
-bot = commands.Bot(command_prefix="/", intents=discord.Intents.default())
+intents = discord.Intents.default()
+bot = discord.Bot(intents=intents)
 
 # ---- INSTALLATION DE STOCKFISH ----
 def download_stockfish():
@@ -92,7 +91,7 @@ def get_move_quality(score_before, score_after, turn):
         return "✅ Bon coup"
 
 # ---- COMMANDE DISCORD ----
-@bot.slash_command(name="chess", description="Analyse une partie d'échecs au format PGN.")
+@bot.slash_command(name="analyser", description="Analyse une partie d'échecs au format PGN.")
 async def analyser(ctx: discord.ApplicationContext, pgn: str):
     await ctx.defer()
     analyses, error = await analyser_partie(pgn)
@@ -129,3 +128,4 @@ async def on_ready():
 if __name__ == "__main__":
     ensure_stockfish()
     bot.run(BOT_TOKEN)
+        
