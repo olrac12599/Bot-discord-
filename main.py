@@ -14,25 +14,22 @@ STOCKFISH_URL = "https://github.com/official-stockfish/Stockfish/releases/downlo
 WORK_DIR = Path("/tmp/stockfish")
 ENGINE_BIN = WORK_DIR / "stockfish_bin"
 
-# --- DISCORD SETUP ---
 intents = discord.Intents.default()
 intents.message_content = True
 bot = commands.Bot(command_prefix=COMMAND_PREFIX, intents=intents)
 
-# --- STOCKFISH INSTALL ---
+# --- STOCKFISH INSTALLATION ---
 def download_stockfish():
     WORK_DIR.mkdir(parents=True, exist_ok=True)
     archive = WORK_DIR / "sf.tar"
-    print("📥 Téléchargement de Stockfish...")
-    r = requests.get(STOCKFISH_URL, stream=True, timeout=60)
-    r.raise_for_status()
+    print("📥 Téléchargement de Stockfish 17.1...")
+    r = requests.get(STOCKFISH_URL, stream=True)
     with open(archive, "wb") as f:
-        for chunk in r.iter_content(8192):
-            f.write(chunk)
+        shutil.copyfileobj(r.raw, f)
     return archive
 
 def extract_stockfish(archive: Path):
-    print("📂 Extraction du binaire...")
+    print("📂 Extraction de Stockfish...")
     with tarfile.open(archive, "r:") as tar:
         tar.extractall(WORK_DIR)
     for f in WORK_DIR.rglob("*"):
@@ -44,49 +41,41 @@ def extract_stockfish(archive: Path):
     return False
 
 def ensure_stockfish():
-    if ENGINE_BIN.exists():
-        return
+    if ENGINE_BIN.exists(): return
     archive = download_stockfish()
     if not extract_stockfish(archive):
-        raise RuntimeError("❌ Stockfish introuvable après extraction.")
+        raise RuntimeError("❌ Échec installation Stockfish.")
     archive.unlink(missing_ok=True)
 
-# --- ÉVALUATION ---
-def format_score(score):
-    if score.is_mate():
-        return f"M{score.mate()}"
-    return f"{score.score / 100:.2f}"
-
-def get_move_quality(best_score, actual_score, turn):
-    best = best_score.white() if turn == chess.WHITE else best_score.black()
-    actual = actual_score.white() if turn == chess.WHITE else actual_score.black()
-
-    if best.is_mate() or actual.is_mate():
-        return "⚡️ Coup décisif", 0
-
-    loss = (best.score or 0) - (actual.score or 0)
-
-    if loss >= 300:
-        return "🔴 ⁉️ Gaffe", loss
-    elif loss >= 150:
-        return "🟠 ❓ Erreur", loss
-    elif loss >= 50:
-        return "🟡 ❔ Imprécision", loss
-    elif loss >= 15:
-        return "👍 Bon", loss
+# --- QUALITÉ DE COUP ---
+def get_move_quality(cp_loss):
+    if cp_loss <= 15:
+        return "✨ Brillant"
+    elif cp_loss <= 30:
+        return "👍 Excellent"
+    elif cp_loss <= 70:
+        return "🟡 Imprécision"
+    elif cp_loss <= 150:
+        return "🟠 Erreur"
     else:
-        return "📚 Théorique", loss
+        return "🔴 Gaffe"
+
+# --- PRÉCISION ---
+def calculate_accuracy(cp_losses):
+    if not cp_losses:
+        return 100.0
+    return sum(100 * (1 - min(1, cp / 300)) for cp in cp_losses) / len(cp_losses)
 
 # --- GRAPHIQUE ---
-def generate_graph(evals, path):
+def generate_eval_graph(evals, path):
     plt.figure(figsize=(10, 4))
-    plt.plot(evals, color='blue')
-    plt.axhline(0, color='black', linewidth=0.5)
-    plt.title("Évolution de l'évaluation")
+    plt.plot(evals, color='blue', linewidth=2)
+    plt.axhline(0, color='black')
+    plt.title("Évaluation (en centipawns)")
     plt.xlabel("Coup")
-    plt.ylabel("Évaluation (centipawns)")
-    plt.grid(True, linestyle='--', alpha=0.5)
-    plt.savefig(path, bbox_inches='tight')
+    plt.ylabel("Avantage")
+    plt.grid(True)
+    plt.savefig(path)
     plt.close()
 
 # --- COMMANDE !analyser ---
@@ -96,74 +85,79 @@ async def analyser(ctx, *, pgn: str):
 
     try:
         pgn_clean = re.sub(r"{\[.*?\]}", "", pgn)
-        pgn_io = io.StringIO(pgn_clean)
-        game = chess.pgn.read_game(pgn_io)
-
+        game = chess.pgn.read_game(io.StringIO(pgn_clean))
         if not game:
             await ctx.send("❌ Format PGN invalide.")
             return
 
         board = game.board()
         engine = chess.engine.SimpleEngine.popen_uci(str(ENGINE_BIN))
-
-        analyses = []
-        evals = []
+        evals, report = [], []
+        white_losses, black_losses = [], []
 
         for move in game.mainline_moves():
+            info_before = engine.analyse(board, chess.engine.Limit(time=0.1))
+            score_before = info_before["score"].pov(board.turn)
+            best_move = info_before.get("pv", [move])[0]
+
             if move not in board.legal_moves:
                 await ctx.send(f"⚠️ Coup illégal détecté : `{move.uci()}`")
-                break
+                return
 
-            info_before = engine.analyse(board, chess.engine.Limit(time=0.2))
-            best_move = info_before.get("pv", [None])[0]
+            san = board.san(move)
+            cp_before = score_before.score(mate_score=10000) or 0
 
             board.push(move)
-            info_after = engine.analyse(board, chess.engine.Limit(time=0.2))
 
-            best_score = info_before["score"]
-            actual_score = info_after["score"]
+            info_after = engine.analyse(board, chess.engine.Limit(time=0.1))
+            score_after = info_after["score"].pov(not board.turn)
+            cp_after = score_after.score(mate_score=10000) or 0
 
-            evals.append(actual_score.white().score(mate_score=10000) or 0)
+            cp_loss = cp_before - cp_after
+            quality = get_move_quality(cp_loss)
+            player = "⚪️" if board.turn == chess.BLACK else "⚫️"
 
-            analyses.append((move, best_move, best_score, actual_score, board.turn))
+            line = f"{player} {san} — {quality}"
+            if quality in ["🟡 Imprécision", "🟠 Erreur", "🔴 Gaffe"]:
+                best_san = board.san(best_move) if best_move in board.legal_moves else best_move.uci()
+                line += f" (Meilleur : {best_san})"
+
+            report.append(line)
+
+            if board.turn == chess.WHITE:
+                white_losses.append(abs(cp_loss))
+            else:
+                black_losses.append(abs(cp_loss))
+
+            evals.append(cp_after)
 
         engine.quit()
 
-        # Format texte
-        msg = ""
-        board = game.board()
-        for i, (move, best_move, best_score, actual_score, turn) in enumerate(analyses):
-            player = "⚪️" if board.turn == chess.WHITE else "⚫️"
-            san = board.san(move)
-            board.push(move)
-
-            quality, loss = get_move_quality(best_score, actual_score, not board.turn)
-            best_san = board.san(best_move) if best_move and best_move in board.legal_moves else "?"
-            score = format_score(actual_score)
-
-            line = f"{player} {san} — {quality} ({score})"
-            if quality.startswith("🟡") or quality.startswith("🟠") or quality.startswith("🔴"):
-                line += f" | Meilleur : {best_san}"
-            msg += line + "\n"
+        # Précision
+        white_acc = calculate_accuracy(white_losses)
+        black_acc = calculate_accuracy(black_losses)
 
         # Graphique
-        graph_path = WORK_DIR / f"eval_graph_{ctx.message.id}.png"
-        generate_graph(evals, graph_path)
+        graph_path = WORK_DIR / f"graph_{ctx.message.id}.png"
+        generate_eval_graph(evals, graph_path)
 
-        # Envoi
-        if len(msg) > 1900:
-            buffer = io.StringIO(msg)
-            await ctx.send("📝 Analyse :", files=[
-                discord.File(buffer, filename="analyse.txt"),
-                discord.File(graph_path, filename="eval.png")
-            ])
+        embed = discord.Embed(title="📊 Rapport d'Analyse", color=discord.Color.green())
+        embed.add_field(name="Précision", value=f"⚪️ Blancs : {white_acc:.1f}%\n⚫️ Noirs : {black_acc:.1f}%")
+        embed.set_image(url="attachment://graph.png")
+        file = discord.File(graph_path, filename="graph.png")
+
+        # Texte long en fichier
+        if len("\n".join(report)) > 1900:
+            txt = io.StringIO("\n".join(report))
+            await ctx.send(embed=embed, files=[file, discord.File(txt, filename="analyse.txt")])
         else:
-            await ctx.send(msg, file=discord.File(graph_path, filename="eval.png"))
+            await ctx.send(embed=embed, file=file)
+            await ctx.send("📝\n" + "\n".join(report))
 
     except Exception as e:
         await ctx.send(f"❌ Erreur pendant l'analyse : {e}")
 
-# --- READY ---
+# --- BOT READY ---
 @bot.event
 async def on_ready():
     print(f"✅ Connecté en tant que {bot.user}")
