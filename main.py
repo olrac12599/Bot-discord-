@@ -6,7 +6,7 @@ import time
 import subprocess
 import traceback
 import random
-import undetected_chromedriver as uc  # ✅ Import sans .v2
+import undetected_chromedriver as uc
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
@@ -54,14 +54,12 @@ def record_insta_session(account_to_watch):
     chrome_options.add_argument("--window-size=1280,720")
     chrome_options.add_argument("--lang=en-US")
     chrome_options.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36")
-    chrome_options.add_experimental_option("excludeSwitches", ["enable-automation"])
-    chrome_options.add_experimental_option("useAutomationExtension", False)
 
     driver = None
     ffmpeg = None
 
     try:
-        driver = uc.Chrome(options=chrome_options, headless=False)  # ✅ headless désactivé
+        driver = uc.Chrome(options=chrome_options, headless=False)
         driver.execute_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
         wait = WebDriverWait(driver, 20)
 
@@ -71,7 +69,6 @@ def record_insta_session(account_to_watch):
             "-b:v", "1M", "-pix_fmt", "yuv420p", video_filename
         ])
 
-        # Tentative de connexion avec retry en cas de 429
         MAX_RETRIES = 3
         RETRY_DELAY = 5
         for attempt in range(MAX_RETRIES):
@@ -85,7 +82,6 @@ def record_insta_session(account_to_watch):
         else:
             raise Exception("Erreur 429 répétée")
 
-        # Cookies
         try:
             cookie_btn = WebDriverWait(driver, 10).until(
                 EC.element_to_be_clickable((By.XPATH, "//button[contains(text(), 'Allow all cookies')]"))
@@ -95,7 +91,6 @@ def record_insta_session(account_to_watch):
         except:
             print("[ℹ️] Pas de pop-up cookies.")
 
-        # Login
         print("[🔐] Connexion...")
         wait.until(EC.visibility_of_element_located((By.NAME, "username"))).send_keys(INSTA_USERNAME)
         time.sleep(random.uniform(1, 2))
@@ -107,7 +102,6 @@ def record_insta_session(account_to_watch):
         print("[✅] Connecté à Instagram.")
         time.sleep(random.uniform(2, 4))
 
-        # Pop-up "Enregistrer infos"
         try:
             btn = WebDriverWait(driver, 10).until(
                 EC.element_to_be_clickable((By.XPATH, "//button[contains(text(), 'Not Now')]"))
@@ -117,7 +111,6 @@ def record_insta_session(account_to_watch):
         except:
             print("[ℹ️] Pas de pop-up 'infos'.")
 
-        # Pop-up notifications
         try:
             notif = WebDriverWait(driver, 10).until(
                 EC.element_to_be_clickable((By.XPATH, "//button[contains(text(), 'Not Now')]"))
@@ -127,7 +120,6 @@ def record_insta_session(account_to_watch):
         except:
             print("[ℹ️] Pas de pop-up notif.")
 
-        # Aller au profil
         driver.get(f"https://www.instagram.com/{account_to_watch}/")
         wait.until(EC.presence_of_element_located((By.TAG_NAME, "h2")))
         print("[✅] Profil chargé.")
