@@ -5,6 +5,7 @@ import asyncio
 import time
 import subprocess
 import traceback
+import random # <-- Ajouté pour les pauses aléatoires
 from selenium import webdriver
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
@@ -12,8 +13,8 @@ from selenium.webdriver.support import expected_conditions as EC
 
 # --- CONFIGURATION DES VARIABLES D'ENVIRONNEMENT ---
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
-INSTA_USERNAME = os.getenv("INSTA_USERNAME") # <-- CHANGÉ
-INSTA_PASSWORD = os.getenv("INSTA_PASSWORD") # <-- CHANGÉ
+INSTA_USERNAME = os.getenv("INSTA_USERNAME")
+INSTA_PASSWORD = os.getenv("INSTA_PASSWORD")
 # Compte par défaut à visiter si aucun n'est spécifié dans la commande
 DEFAULT_ACCOUNT = os.getenv("ACCOUNT_TO_WATCH", "instagram") 
 
@@ -25,7 +26,7 @@ intents = discord.Intents.default()
 intents.message_content = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 
-# --- FONCTION DE CAPTURE D'ÉCRAN EN CAS D'ERREUR (INCHANGÉE) ---
+# --- FONCTION DE CAPTURE D'ÉCRAN EN CAS D'ERREUR ---
 def capture_on_error(driver, label="error"):
     timestamp = int(time.time())
     filename = f"/tmp/screenshot_{label}_{timestamp}.png"
@@ -37,7 +38,7 @@ def capture_on_error(driver, label="error"):
         print(f"[❌] La capture du screenshot a échoué : {e}")
     return None
 
-# --- FONCTION D'ENREGISTREMENT VIDÉO (MODIFIÉE POUR INSTAGRAM) ---
+# --- FONCTION D'ENREGISTREMENT VIDÉO ---
 def record_insta_session(account_to_watch):
     os.environ["DISPLAY"] = ":99"
     timestamp = int(time.time())
@@ -71,47 +72,47 @@ def record_insta_session(account_to_watch):
 
         # 1. Aller sur la page de connexion Instagram
         driver.get("https://www.instagram.com/accounts/login/")
+        time.sleep(random.uniform(3, 5)) # Pause aléatoire
 
         # 2. Gérer le pop-up de cookies
         try:
             print("[⏳] Recherche du pop-up de cookies...")
             cookie_button = WebDriverWait(driver, 10).until(
-                EC.element_to_be_clickable((By.XPATH, "//button[contains(text(), 'Allow all cookies')]"))
+                EC.element_to_be_clickable((By.XPATH, "//button[contains(text(), 'Allow all cookies')] | //button[contains(text(), 'Allow essential and optional cookies')]"))
             )
             cookie_button.click()
             print("[✅] Pop-up de cookies fermé.")
-            time.sleep(1)
+            time.sleep(random.uniform(1, 2))
         except Exception:
             print("[ℹ️] Aucun pop-up de cookies n'a été détecté.")
 
         # 3. Se connecter
         print("[⏳] Tentative de connexion...")
         wait.until(EC.visibility_of_element_located((By.NAME, "username"))).send_keys(INSTA_USERNAME)
+        time.sleep(random.uniform(1, 2.5)) # Pause après avoir tapé le pseudo
+
         driver.find_element(By.NAME, "password").send_keys(INSTA_PASSWORD)
-        driver.find_element(By.XPATH, "//button[@type='submit']").click()
+        time.sleep(random.uniform(1, 3)) # Pause après avoir tapé le mot de passe
         
-        # Attendre la fin du chargement en cherchant un élément de la page d'accueil
+        driver.find_element(By.XPATH, "//button[@type='submit']").click()
         wait.until(EC.presence_of_element_located((By.XPATH, "//*[contains(@href, '/direct/inbox/')]")))
         print("[✅] Connexion réussie.")
+        time.sleep(random.uniform(2, 4))
 
         # 4. Gérer le pop-up "Enregistrer les informations de connexion"
         try:
             print("[⏳] Recherche du pop-up 'Enregistrer les infos'...")
-            not_now_button = WebDriverWait(driver, 10).until(
-                EC.element_to_be_clickable((By.XPATH, "//div[text()='Not Now']"))
-            )
+            not_now_button = WebDriverWait(driver, 10).until(EC.element_to_be_clickable((By.XPATH, "//div[text()='Not Now'] | //button[contains(text(), 'Not Now')]")))
             not_now_button.click()
             print("[✅] Pop-up 'Enregistrer les infos' fermé.")
-            time.sleep(1)
+            time.sleep(random.uniform(1, 2))
         except Exception:
             print("[ℹ️] Aucun pop-up 'Enregistrer les infos' n'a été détecté.")
 
         # 5. Gérer le pop-up "Activer les notifications"
         try:
             print("[⏳] Recherche du pop-up 'Notifications'...")
-            notif_button = WebDriverWait(driver, 10).until(
-                EC.element_to_be_clickable((By.XPATH, "//button[contains(text(), 'Not Now')]"))
-            )
+            notif_button = WebDriverWait(driver, 10).until(EC.element_to_be_clickable((By.XPATH, "//button[contains(text(), 'Not Now')]")))
             notif_button.click()
             print("[✅] Pop-up 'Notifications' fermé.")
         except Exception:
@@ -149,28 +150,24 @@ def record_insta_session(account_to_watch):
     screenshot_result = screenshot_file if screenshot_file and os.path.exists(screenshot_file) else None
     return video_result, screenshot_result
 
-# --- COMMANDE DISCORD (MODIFIÉE POUR INSTAGRAM) ---
+# --- COMMANDE DISCORD ---
 @bot.command(name="videoinsta")
 async def videoinsta(ctx, account_name: str = None):
-    # Utilise le compte spécifié, ou le compte par défaut si aucun n'est donné
     target_account = account_name if account_name else DEFAULT_ACCOUNT
         
     await ctx.send(f"🎥 Lancement de l'enregistrement pour le profil `{target_account}`...")
     try:
-        # Exécute la fonction de blocage dans un thread séparé pour ne pas bloquer le bot
         video_file, screenshot = await asyncio.to_thread(record_insta_session, target_account)
 
         if video_file:
-            # Discord a une limite de taille de fichier
-            if os.path.getsize(video_file) < 25 * 1024 * 1024: # Limite augmentée à 25MB pour Nitro Basic
+            if os.path.getsize(video_file) < 25 * 1024 * 1024:
                 await ctx.send("✅ Enregistrement terminé !", file=discord.File(video_file))
             else:
-                await ctx.send(f"⚠️ La vidéo a été enregistrée mais est trop lourde pour Discord (> 25MB). Chemin: `{video_file}`")
+                await ctx.send(f"⚠️ La vidéo a été enregistrée mais est trop lourde pour Discord (> 25MB).")
             os.remove(video_file)
         else:
             await ctx.send("❌ La génération de la vidéo a échoué. Une erreur s'est produite.")
 
-        # Envoyer le screenshot si un a été pris lors d'une erreur
         if screenshot:
             await ctx.send("🖼️ Voici un screenshot capturé au moment de l'erreur :", file=discord.File(screenshot))
             os.remove(screenshot)
@@ -196,4 +193,3 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
-
