@@ -5,7 +5,6 @@ from discord.ext import commands
 from playwright.async_api import async_playwright
 from datetime import datetime
 
-load_dotenv()
 
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
 INSTA_USERNAME = os.getenv("INSTA_USERNAME")
