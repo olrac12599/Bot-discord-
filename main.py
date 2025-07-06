@@ -1,72 +1,84 @@
 import os
 import asyncio
-import discord
 from discord.ext import commands
-from playwright.async_api import async_playwright
+import discord
 from dotenv import load_dotenv
-import subprocess
+from playwright.async_api import async_playwright
+import datetime
 
 load_dotenv()
 
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
-IG_USERNAME = os.getenv("name")
-IG_PASSWORD = os.getenv("mdp")
+INSTAGRAM_USERNAME = os.getenv("name")
+INSTAGRAM_PASSWORD = os.getenv("mdp")
 ACCOUNT_TO_WATCH = os.getenv("name2")
 
 intents = discord.Intents.default()
 intents.message_content = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 
-VIDEO_PATH = "/tmp/insta_record.mp4"
 
-async def record_screen(duration=30):
+async def record_screen(duration: int = 30, output_file="screen.mp4"):
+    """Lance ffmpeg pour enregistrer l'écran."""
+    filename = f"/tmp/{output_file}"
     cmd = [
-        "ffmpeg", "-y",
+        "ffmpeg",
+        "-y",
         "-video_size", "1280x720",
-        "-f", "x11grab", "-i", ":99.0",
+        "-f", "x11grab",
+        "-i", ":99.0",
         "-t", str(duration),
-        "-pix_fmt", "yuv420p",
-        VIDEO_PATH
+        "-r", "30",
+        "-codec:v", "libx264",
+        "-preset", "ultrafast",
+        filename
     ]
-    return await asyncio.create_subprocess_exec(*cmd)
+    proc = await asyncio.create_subprocess_exec(*cmd)
+    await proc.communicate()
+    return filename
 
-async def visit_instagram():
+
+async def run_playwright():
     async with async_playwright() as p:
-        browser = await p.chromium.launch(headless=False, args=["--window-size=1280,720"])
+        browser = await p.chromium.launch(headless=False, args=["--no-sandbox"])
         context = await browser.new_context(viewport={"width": 1280, "height": 720})
         page = await context.new_page()
 
         await page.goto("https://www.instagram.com/accounts/login/")
-        await page.wait_for_selector("input[name='username']")
+        await page.wait_for_timeout(5000)
 
-        await page.fill("input[name='username']", IG_USERNAME)
-        await page.fill("input[name='password']", IG_PASSWORD)
+        await page.fill("input[name='username']", INSTAGRAM_USERNAME)
+        await page.fill("input[name='password']", INSTAGRAM_PASSWORD)
         await page.click("button[type='submit']")
 
-        await page.wait_for_timeout(5000)
-        await page.goto(f"https://www.instagram.com/{ACCOUNT_TO_WATCH}/")
-        await page.wait_for_timeout(10000)
+        await page.wait_for_timeout(7000)  # Attente après login
+
+        if ACCOUNT_TO_WATCH:
+            await page.goto(f"https://www.instagram.com/{ACCOUNT_TO_WATCH}/")
+            await page.wait_for_timeout(15000)  # Laisse le temps à l'utilisateur de voir
 
         await browser.close()
 
+
 @bot.command()
 async def insta(ctx):
-    await ctx.send("📸 Lancement de l'enregistrement et connexion à Instagram...")
+    await ctx.send("⏳ Lancement de l'enregistrement et de la session Instagram...")
 
-    ffmpeg_proc = await record_screen(duration=30)
-    await asyncio.sleep(3)  # Petit délai avant d’ouvrir le navigateur
+    try:
+        screen_task = asyncio.create_task(record_screen(duration=30))
+        await run_playwright()
+        video_path = await screen_task
 
-    await visit_instagram()
-    await ffmpeg_proc.wait()
+        await ctx.send("📹 Voici la vidéo enregistrée :", file=discord.File(video_path))
 
-    if os.path.exists(VIDEO_PATH):
-        await ctx.send("🎥 Voici l'enregistrement :", file=discord.File(VIDEO_PATH))
-    else:
-        await ctx.send("❌ Aucune vidéo trouvée.")
+    except Exception as e:
+        await ctx.send(f"❌ Erreur : {e}")
+
 
 @bot.event
 async def on_ready():
-    print(f"✅ Bot connecté en tant que {bot.user}")
+    print(f"✅ Bot connecté : {bot.user}")
+
 
 if __name__ == "__main__":
     bot.run(DISCORD_TOKEN)
