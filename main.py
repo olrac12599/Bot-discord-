@@ -29,8 +29,8 @@ async def insta(ctx):
             await page.goto("https://www.instagram.com/accounts/login/", timeout=60000)
             await page.screenshot(path="/tmp/step1_login.png")
 
-            await page.fill('input[name="username"]', INSTA_USERNAME)
-            await page.fill('input[name="password"]', INSTA_PASSWORD)
+            await page.get_by_label("Username, email or mobile number").fill(INSTA_USERNAME)
+            await page.get_by_label("Password").fill(INSTA_PASSWORD)
             await page.screenshot(path="/tmp/step2_credentials.png")
 
             await page.click('button[type="submit"]')
