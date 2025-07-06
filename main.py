@@ -12,7 +12,7 @@ COMMAND_PREFIX = "!"
 
 STOCKFISH_URL = "https://github.com/official-stockfish/Stockfish/releases/download/sf_17.1/stockfish-ubuntu-x86-64-avx2.tar"
 WORK_DIR = Path("/tmp/stockfish")
-ENGINE_BIN = WORK_DIR / "stockfish"
+ENGINE_BIN = WORK_DIR / "stockfish_bin"
 
 # ---- BOT INIT ----
 intents = discord.Intents.default()
