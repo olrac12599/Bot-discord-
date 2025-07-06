@@ -6,7 +6,7 @@ import time
 import subprocess
 import traceback
 import random
-import undetected_chromedriver.v2 as uc
+import undetected_chromedriver as uc  # ✅ Import sans .v2
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
@@ -61,18 +61,17 @@ def record_insta_session(account_to_watch):
     ffmpeg = None
 
     try:
-        driver = uc.Chrome(options=chrome_options)
+        driver = uc.Chrome(options=chrome_options, headless=False)  # ✅ headless désactivé
         driver.execute_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
         wait = WebDriverWait(driver, 20)
 
-        # Démarrer enregistrement vidéo
         ffmpeg = subprocess.Popen([
             "ffmpeg", "-y", "-video_size", "1280x720", "-framerate", "25",
             "-f", "x11grab", "-i", ":99.0", "-c:v", "libvpx-vp9",
             "-b:v", "1M", "-pix_fmt", "yuv420p", video_filename
         ])
 
-        # Navigation avec gestion du 429
+        # Tentative de connexion avec retry en cas de 429
         MAX_RETRIES = 3
         RETRY_DELAY = 5
         for attempt in range(MAX_RETRIES):
@@ -108,7 +107,7 @@ def record_insta_session(account_to_watch):
         print("[✅] Connecté à Instagram.")
         time.sleep(random.uniform(2, 4))
 
-        # Pop-up "enregistrer infos"
+        # Pop-up "Enregistrer infos"
         try:
             btn = WebDriverWait(driver, 10).until(
                 EC.element_to_be_clickable((By.XPATH, "//button[contains(text(), 'Not Now')]"))
