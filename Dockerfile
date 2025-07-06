@@ -1,35 +1,34 @@
 FROM python:3.12-slim
 
-# Install system dependencies
-RUN apt-get update && apt-get install -y \
+# Install dependencies
+RUN apt update && apt install -y \
     ffmpeg \
     wget \
-    curl \
-    unzip \
-    xvfb \
-    libglib2.0-0 \
+    git \
     libnss3 \
-    libgconf-2-4 \
-    libatk1.0-0 \
     libatk-bridge2.0-0 \
+    libgtk-3-0 \
     libxss1 \
     libasound2 \
-    fonts-liberation \
-    libappindicator3-1 \
-    libdbus-glib-1-2 \
-    && apt-get clean
-
-# Install Python dependencies
-RUN pip install --no-cache-dir playwright python-dotenv discord.py
-
-# Install browsers for Playwright
-RUN playwright install chromium
+    libx11-xcb1 \
+    libxcomposite1 \
+    libxdamage1 \
+    libxrandr2 \
+    x11-utils \
+    xvfb \
+    && rm -rf /var/lib/apt/lists/*
 
 # Create app directory
 WORKDIR /app
 
-# Copy all files to the container
+# Install python packages
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Install playwright and browsers
+RUN pip install playwright && playwright install
+
+# Copy app code
 COPY . .
 
-# Run the bot
-CMD ["python", "main.py"]
+CMD ["xvfb-run", "python", "main.py"]
