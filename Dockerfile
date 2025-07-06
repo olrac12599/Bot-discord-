@@ -2,7 +2,6 @@
 FROM python:3.12-slim
 
 # Met à jour et installe les dépendances système requises
-# ffmpeg pour l'enregistrement, xvfb pour l'affichage virtuel, et chromium
 RUN apt-get update && apt-get install -y \
     ffmpeg \
     xvfb \
@@ -11,6 +10,7 @@ RUN apt-get update && apt-get install -y \
     && rm -rf /var/lib/apt/lists/*
 
 # Définit l'affichage virtuel sur lequel le navigateur s'exécutera
+# Bien que l'entrypoint s'en occupe, le définir ici reste une bonne pratique
 ENV DISPLAY=:99
 
 # Copie et installe les dépendances Python
@@ -21,6 +21,9 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY . /app
 WORKDIR /app
 
-# Commande de lancement : exécute le script Python à l'intérieur de l'environnement virtuel xvfb
-CMD ["xvfb-run", "python", "main.py"]
+# Rendre le script d'entrée exécutable
+COPY entrypoint.sh .
+RUN chmod +x entrypoint.sh
 
+# Définir le script d'entrée comme point de lancement du conteneur
+ENTRYPOINT ["./entrypoint.sh"]
