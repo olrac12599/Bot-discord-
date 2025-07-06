@@ -1,4 +1,4 @@
-import os, io, stat, tarfile, shutil, requests
+import os, io, stat, tarfile, shutil, requests, re
 import discord
 from discord.ext import commands
 import chess
@@ -9,7 +9,6 @@ from pathlib import Path
 # ---- CONFIGURATION ----
 TOKEN = os.getenv("DISCORD_TOKEN") or "VOTRE_TOKEN_DISCORD_ICI"
 COMMAND_PREFIX = "!"
-
 STOCKFISH_URL = "https://github.com/official-stockfish/Stockfish/releases/download/sf_17.1/stockfish-ubuntu-x86-64-avx2.tar"
 WORK_DIR = Path("/tmp/stockfish")
 ENGINE_BIN = WORK_DIR / "stockfish_bin"
@@ -19,7 +18,7 @@ intents = discord.Intents.default()
 intents.message_content = True
 bot = commands.Bot(command_prefix=COMMAND_PREFIX, intents=intents)
 
-# ---- STOCKFISH SETUP ----
+# ---- STOCKFISH INSTALLATION ----
 def download_stockfish():
     WORK_DIR.mkdir(parents=True, exist_ok=True)
     archive = WORK_DIR / "sf.tar"
@@ -54,7 +53,7 @@ def ensure_stockfish():
         raise RuntimeError("❌ Impossible d’installer Stockfish.")
     archive.unlink(missing_ok=True)
 
-# ---- ANALYSE PGN ----
+# ---- QUALITÉ DES COUPS ----
 def get_move_quality(score_before, score_after, turn):
     pov_before = score_before.white() if turn == chess.WHITE else score_before.black()
     pov_after = score_after.white() if turn == chess.WHITE else score_after.black()
@@ -77,8 +76,11 @@ async def analyser(ctx, *, pgn: str):
     await ctx.send("🔎 Analyse en cours...")
 
     try:
-        pgn_io = io.StringIO(pgn)
+        # Nettoyer les annotations spéciales de Chess.com
+        pgn_clean = re.sub(r"{\[.*?\]}", "", pgn)
+        pgn_io = io.StringIO(pgn_clean)
         game = chess.pgn.read_game(pgn_io)
+
         if not game:
             await ctx.send("❌ Format PGN invalide.")
             return
@@ -88,25 +90,38 @@ async def analyser(ctx, *, pgn: str):
         analyses = []
 
         for move in game.mainline_moves():
+            if move not in board.legal_moves:
+                await ctx.send(f"⚠️ Coup illégal détecté : {move}")
+                break
+
             info_before = engine.analyse(board, chess.engine.Limit(time=0.1))
             board.push(move)
             info_after = engine.analyse(board, chess.engine.Limit(time=0.1))
+
             analyses.append((move, info_before["score"], info_after["score"]))
 
         engine.quit()
 
+        if not analyses:
+            await ctx.send("❌ Aucune analyse effectuée.")
+            return
+
         index = 4 if len(analyses) > 4 else len(analyses) - 1
         move, score_before, score_after = analyses[index]
 
-        temp_board = game.board()
+        # Rejouer les coups jusqu'à ce coup
+        board = game.board()
         for i in range(index + 1):
-            temp_board.push(analyses[i][0])
+            if analyses[i][0] in board.legal_moves:
+                board.push(analyses[i][0])
+            else:
+                break
 
-        quality = get_move_quality(score_before, score_after, not temp_board.turn)
+        quality = get_move_quality(score_before, score_after, not board.turn)
         score_cp = score_after.white().score(mate_score=10000) / 100.0
 
         await ctx.send(
-            f"♟️ Coup {index + 1} : `{temp_board.san(move)}`\n"
+            f"♟️ Coup {index + 1} : `{board.san(move)}`\n"
             f"Qualité : {quality}\n"
             f"Évaluation après le coup : `{score_cp}`"
         )
