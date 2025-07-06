@@ -1,5 +1,2 @@
 discord.py
-python-dotenv
-playwright
-ffmpeg-python
-playwright-stealth
+undetected-chromedriver
