@@ -1,1 +1,6 @@
-c
+__pycache__/
+*.pyc
+*.log
+*.mp4
+*.png
+.env
