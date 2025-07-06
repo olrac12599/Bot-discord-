@@ -1,55 +1,64 @@
-import os
-import urllib.request
-import tarfile
-import shutil
-from stockfish import Stockfish
-import zstandard
-import requests
-import stat
-import chess.engine
-import asyncio
+import os, stat, shutil, tarfile, asyncio, requests, chess.engine
+from pathlib import Path
 
-STOCKFISH_DIR = "/tmp/stockfish_dir"
-STOCKFISH_EXEC = os.path.join(STOCKFISH_DIR, "stockfish")
-
+# ----- CONFIG -----
 STOCKFISH_URL = (
     "https://github.com/official-stockfish/Stockfish/"
     "releases/download/sf_17.1/stockfish-ubuntu-x86-64-avx2.tar"
 )
+WORK_DIR       = Path("/tmp/stockfish_work")
+ENGINE_BIN     = WORK_DIR / "stockfish"          # où l’on recopie le binaire
 
-def download_and_extract():
-    os.makedirs(STOCKFISH_DIR, exist_ok=True)
-    tar_path = os.path.join(STOCKFISH_DIR, "stockfish.tar")
+# ----- DOWNLOAD & EXTRACT -----
+def download_stockfish(url: str, dest: Path) -> Path:
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    print(f"📥 Téléchargement : {url}")
+    r = requests.get(url, stream=True, timeout=60)
+    r.raise_for_status()
+    with open(dest, "wb") as f:
+        for chunk in r.iter_content(8192):
+            f.write(chunk)
+    print(f"✅ Fichier téléchargé : {dest.stat().st_size/1_048_576:.1f} MB")
+    return dest
 
-    print("📦 Téléchargement de Stockfish…")
-    urllib.request.urlretrieve(STOCKFISH_URL, tar_path)
-
+def extract_tar(tar_path: Path, out_dir: Path) -> Path:
+    print("📂 Extraction du .tar…")
+    out_dir.mkdir(parents=True, exist_ok=True)
     with tarfile.open(tar_path, "r:") as tar:
-        tar.extractall(STOCKFISH_DIR, filter="data")
-    os.remove(tar_path)
+        tar.extractall(out_dir, filter="data")   # compatible Py 3.11 +
+    # Cherche un fichier exécutable dont le nom commence par “stockfish”
+    for f in out_dir.rglob("*"):
+        if f.is_file() and f.name.startswith("stockfish") and os.access(f, os.X_OK):
+            print(f"🔎 Binaire trouvé : {f}")
+            return f
+    raise FileNotFoundError("Binaire Stockfish introuvable dans l’archive")
 
-    for root, _, files in os.walk(STOCKFISH_DIR):
-        if "stockfish" in files:
-            src = os.path.join(root, "stockfish")
-            shutil.copy(src, STOCKFISH_EXEC)
-            os.chmod(STOCKFISH_EXEC, stat.S_IEXEC)
-            return True
-    return False
+def ensure_engine_ready():
+    if ENGINE_BIN.exists():
+        print("👍 Stockfish déjà présent.")
+        return
+    tar_file = WORK_DIR / "stockfish.tar"
+    download_stockfish(STOCKFISH_URL, tar_file)
+    bin_in_tar = extract_tar(tar_file, WORK_DIR / "extracted")
+    shutil.copy(bin_in_tar, ENGINE_BIN)
+    ENGINE_BIN.chmod(ENGINE_BIN.stat().st_mode | stat.S_IEXEC)
+    tar_file.unlink(missing_ok=True)
+    print("✅ Installation terminée.")
 
-async def test_engine():
-    engine = await chess.engine.SimpleEngine.popen_uci(STOCKFISH_EXEC)
-    info = await engine.analyse(chess.Board(), chess.engine.Limit(time=0.1))
-    move = info["pv"][0]
-    print("♟️ Best move:", chess.Board().san(move))
-    await engine.quit()
-
-def setup_and_run():
-    if not os.path.exists(STOCKFISH_EXEC):
-        if not download_and_extract():
-            print("❌ Échec download ou extraction")
-            return
-    print("✅ Stockfish prêt.")
-    asyncio.run(test_engine())
+# ----- QUICK SELF-TEST -----
+async def quick_test():
+    print("🚀 Lancement du moteur pour test…")
+    eng = await chess.engine.SimpleEngine.popen_uci(str(ENGINE_BIN))
+    board = chess.Board()
+    info  = await eng.analyse(board, chess.engine.Limit(depth=10))
+    print("♟️ Coup conseillé :", board.san(info['pv'][0]))
+    await eng.quit()
+    print("🏁 Test terminé, tout est OK.")
 
 if __name__ == "__main__":
-    setup_and_run()
+    try:
+        ensure_engine_ready()
+        asyncio.run(quick_test())
+    except Exception as e:
+        print("❌ Problème :", e)
+        raise
