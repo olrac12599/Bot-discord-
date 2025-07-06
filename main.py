@@ -19,7 +19,7 @@ import cairosvg
 # --- CONFIGURATION ---
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN") or "VOTRE_TOKEN_DISCORD_ICI"
 COMMAND_PREFIX = "!"
-WORK_DIR = Path("/tmp/stockfish_bot")
+WORK_DIR = Path("/tmp/stockfish")
 ENGINE_BIN = WORK_DIR / "stockfish_bin"
 
 # --- DISCORD SETUP ---
