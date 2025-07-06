@@ -1,6 +1,6 @@
 import os
 import urllib.request
-import zipfile
+import tarfile
 import shutil
 from stockfish import Stockfish
 
@@ -8,34 +8,31 @@ STOCKFISH_PATH = "/tmp/stockfish"
 
 def download_stockfish():
     print("📦 Téléchargement de Stockfish...")
-    url = "https://stockfishchess.org/files/stockfish-ubuntu-x86-64-avx2.zip"
-    zip_path = "/tmp/stockfish.zip"
+    # <-- Correction du lien vers le fichier .tar
+    url = "https://github.com/official-stockfish/Stockfish/releases/download/sf_17.1/stockfish-ubuntu-x86-64-avx2.tar"
+    local = "/tmp/stockfish.tar"
 
-    urllib.request.urlretrieve(url, zip_path)
+    urllib.request.urlretrieve(url, local)
 
-    with zipfile.ZipFile(zip_path, "r") as zip_ref:
-        zip_ref.extractall("/tmp/stockfish_extracted")
+    # On extrait le .tar
+    with tarfile.open(local, "r:") as tar_ref:
+        tar_ref.extractall("/tmp/stockfish_extracted")
 
-    # Trouve le fichier binaire dans le dossier extrait
-    for root, dirs, files in os.walk("/tmp/stockfish_extracted"):
-        for file in files:
-            if file == "stockfish":
-                stockfish_bin = os.path.join(root, file)
-                shutil.copy(stockfish_bin, STOCKFISH_PATH)
-                os.chmod(STOCKFISH_PATH, 0o755)
-                return True
+    # On cherche le binaire
+    for root, _, files in os.walk("/tmp/stockfish_extracted"):
+        if "stockfish" in files:
+            src = os.path.join(root, "stockfish")
+            shutil.copy(src, STOCKFISH_PATH)
+            os.chmod(STOCKFISH_PATH, 0o755)
+            return True
     return False
 
-# Téléchargement si nécessaire
 if not os.path.exists(STOCKFISH_PATH):
-    success = download_stockfish()
-    if not success:
-        print("❌ Échec du téléchargement de Stockfish")
+    if not download_stockfish():
+        print("❌ Échec du téléchargement ou extraction.")
         exit(1)
 
-print("✅ Stockfish est prêt.")
-
-# Utilisation
+print("✅ Stockfish prêt.")
 stockfish = Stockfish(STOCKFISH_PATH)
 stockfish.set_position(["e2e4", "e7e5"])
 print("Coup conseillé :", stockfish.get_best_move())
