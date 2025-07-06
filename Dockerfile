@@ -1,15 +1,39 @@
 FROM python:3.12-slim
 
-RUN apt-get update && apt-get install -y \
-    xvfb libnss3 libatk-bridge2.0-0 libxcomposite1 libxdamage1 \
-    libxrandr2 libgbm1 libgtk-3-0 libasound2 libxss1 libxtst6 \
-    x11-utils ffmpeg && rm -rf /var/lib/apt/lists/*
-
 WORKDIR /app
+
+# Dépendances système pour Playwright
+RUN apt-get update && apt-get install -y \
+    curl \
+    ca-certificates \
+    fonts-liberation \
+    libnss3 \
+    libxss1 \
+    libasound2 \
+    libatk1.0-0 \
+    libatk-bridge2.0-0 \
+    libgtk-3-0 \
+    libdrm2 \
+    libgbm1 \
+    libxshmfence1 \
+    libx11-xcb1 \
+    libxcb1 \
+    libxcomposite1 \
+    libxdamage1 \
+    libxrandr2 \
+    libxext6 \
+    libxfixes3 \
+    libexpat1 \
+    wget \
+    unzip \
+    && apt-get clean
+
 COPY requirements.txt .
+
 RUN pip install --no-cache-dir -r requirements.txt
-RUN playwright install chromium
 
 COPY . .
 
-CMD ["xvfb-run", "--server-args=-screen 0 1280x720x24", "python", "main.py"]
+RUN playwright install --with-deps
+
+CMD ["python", "main.py"]
