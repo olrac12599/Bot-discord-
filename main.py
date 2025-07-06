@@ -1,69 +1,55 @@
 import os
-import requests
+import urllib.request
 import tarfile
+import shutil
+from stockfish import Stockfish
+import zstandard
+import requests
 import stat
-import asyncio
 import chess.engine
+import asyncio
 
-# --- Configuration ---
-STOCKFISH_DIR = "stockfish_engine"
-# Lien direct vers une version pré-compilée sur GitHub (source fiable)
-STOCKFISH_URL = "https://github.com/abrok/stockfish-builds/releases/download/stockfish-17/stockfish-17-ubuntu-20.04-x86-64-avx2.tar.gz"
-ARCHIVE_NAME = "stockfish.tar.gz"
-# On ne connaît pas encore le chemin exact, on met une valeur temporaire
-STOCKFISH_EXECUTABLE_TEMP_PATH = os.path.join(STOCKFISH_DIR, "stockfish")
+STOCKFISH_DIR = "/tmp/stockfish_dir"
+STOCKFISH_EXEC = os.path.join(STOCKFISH_DIR, "stockfish")
 
-def list_files(startpath):
-    """Fonction de débogage pour lister les fichiers."""
-    print(f"\n--- CONTENU DU DOSSIER '{startpath}' ---")
-    for root, dirs, files in os.walk(startpath):
-        level = root.replace(startpath, '').count(os.sep)
-        indent = ' ' * 4 * (level)
-        print(f'{indent}{os.path.basename(root)}/')
-        subindent = ' ' * 4 * (level + 1)
-        for f in files:
-            print(f'{subindent}{f}')
-    print("----------------------------------------\n")
+STOCKFISH_URL = (
+    "https://github.com/official-stockfish/Stockfish/"
+    "releases/download/sf_17.1/stockfish-ubuntu-x86-64-avx2.tar"
+)
 
-def setup_stockfish():
-    print("🔧 Lancement de l'installation...")
-    try:
-        os.makedirs(STOCKFISH_DIR, exist_ok=True)
-        archive_path = os.path.join(STOCKFISH_DIR, ARCHIVE_NAME)
+def download_and_extract():
+    os.makedirs(STOCKFISH_DIR, exist_ok=True)
+    tar_path = os.path.join(STOCKFISH_DIR, "stockfish.tar")
 
-        # 1. Télécharger
-        print(f"📥 Téléchargement depuis la nouvelle source...")
-        with requests.get(STOCKFISH_URL, stream=True) as r:
-            r.raise_for_status()
-            with open(archive_path, "wb") as f:
-                for chunk in r.iter_content(chunk_size=8192):
-                    f.write(chunk)
-        print("✅ Téléchargement terminé.")
+    print("📦 Téléchargement de Stockfish…")
+    urllib.request.urlretrieve(STOCKFISH_URL, tar_path)
 
-        # 2. Décompresser l'archive .tar.gz
-        print("🗜️  Décompression de l'archive...")
-        with tarfile.open(archive_path, "r:gz") as tar:
-            tar.extractall(path=STOCKFISH_DIR)
-        print("✅ Décompression terminée.")
-        
-        # 3. BLOC DE DÉBOGAGE
-        print("🔍 Le script va maintenant lister les fichiers extraits puis s'arrêter.")
-        print("   Copiez-collez le log pour trouver le bon chemin de l'exécutable.")
-        list_files(STOCKFISH_DIR)
-        
-        # 4. On s'arrête ici volontairement pour le débogage
-        return False # Stoppe le script pour éviter une erreur
+    with tarfile.open(tar_path, "r:") as tar:
+        tar.extractall(STOCKFISH_DIR, filter="data")
+    os.remove(tar_path)
 
-    except Exception as e:
-        print(f"❌ ERREUR lors de l'installation : {e}")
-        return False
+    for root, _, files in os.walk(STOCKFISH_DIR):
+        if "stockfish" in files:
+            src = os.path.join(root, "stockfish")
+            shutil.copy(src, STOCKFISH_EXEC)
+            os.chmod(STOCKFISH_EXEC, stat.S_IEXEC)
+            return True
+    return False
 
-# Le reste du script ne sera pas exécuté grâce au "return False"
-async def run_check():
-    pass
+async def test_engine():
+    engine = await chess.engine.SimpleEngine.popen_uci(STOCKFISH_EXEC)
+    info = await engine.analyse(chess.Board(), chess.engine.Limit(time=0.1))
+    move = info["pv"][0]
+    print("♟️ Best move:", chess.Board().san(move))
+    await engine.quit()
+
+def setup_and_run():
+    if not os.path.exists(STOCKFISH_EXEC):
+        if not download_and_extract():
+            print("❌ Échec download ou extraction")
+            return
+    print("✅ Stockfish prêt.")
+    asyncio.run(test_engine())
 
 if __name__ == "__main__":
-    if setup_stockfish():
-        asyncio.run(run_check())
-    else:
-        print("Script de débogage terminé. Veuillez fournir les logs.")
+    setup_and_run()
