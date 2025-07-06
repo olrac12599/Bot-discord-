@@ -21,7 +21,7 @@ STOCKFISH_URL = "https://github.com/official-stockfish/Stockfish/releases/downlo
 # URL d'un livre d'ouvertures populaire (format Polyglot .bin)
 OPENING_BOOK_URL = "https://github.com/lichess-org/chess-openings.git"
 
-WORK_DIR = Path("/tmp/stockfish_bot")
+WORK_DIR = Path("/tmp/stockfish")
 ENGINE_BIN = WORK_DIR / "stockfish"
 BOOK_PATH = WORK_DIR / "opening_book.bin" # Chemin vers le livre d'ouvertures
 
