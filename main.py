@@ -38,7 +38,7 @@ async def insta(ctx):
         ffmpeg_proc = await record_screen(duration=30)
 
         async with async_playwright() as p:
-            browser = await p.chromium.launch(headless=False, args=["--display=:99"])
+            browser = await p.chromium.launch(headless=True)
             context = await browser.new_context(viewport={"width": 1280, "height": 720})
             page = await context.new_page()
 
