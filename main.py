@@ -3,7 +3,7 @@ import asyncio
 import discord
 from discord.ext import commands
 from playwright.async_api import async_playwright, Error as PlaywrightError
-from playwright_stealth import stealth_async # <-- 1. IMPORTER STEALTH
+from playwright_stealth.async_api import stealth_async # <-- ✅ LIGNE CORRIGÉE
 
 # --- CHARGEMENT DES VARIABLES D'ENVIRONNEMENT ---
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
@@ -28,7 +28,6 @@ async def insta(ctx):
     async with async_playwright() as p:
         browser = None
         try:
-            # 2. AJOUTER DES ARGUMENTS AU NAVIGATEUR POUR LA STABILITÉ
             browser = await p.chromium.launch(
                 headless=True,
                 args=[
@@ -41,13 +40,11 @@ async def insta(ctx):
             context = await browser.new_context()
             page = await context.new_page()
 
-            # 3. APPLIQUER LE MODE FURTIF (STEALTH)
-            # C'est l'étape la plus importante. Elle doit être faite avant la navigation.
+            # Appliquer le mode furtif (stealth)
             await stealth_async(page)
 
             await page.goto("https://www.instagram.com/accounts/login/", timeout=60000)
             
-            # La suite du code reste identique...
             cookie_button_selector = "button:has-text('Allow all cookies'), button:has-text('Tout autoriser')"
             try:
                 await page.locator(cookie_button_selector).click(timeout=5000)
@@ -55,7 +52,7 @@ async def insta(ctx):
             except PlaywrightError:
                 await ctx.send("🍪 Pas de bannière de cookies détectée.")
             
-            await page.wait_for_timeout(1000) # Petite pause
+            await page.wait_for_timeout(1000)
 
             await page.locator('input[name="username"]').fill(INSTA_USERNAME)
             await page.locator('input[name="password"]').fill(INSTA_PASSWORD)
@@ -100,4 +97,3 @@ if __name__ == "__main__":
         bot.run(DISCORD_TOKEN)
     else:
         print("❌ Erreur critique : Le DISCORD_TOKEN n'est pas défini.")
-
