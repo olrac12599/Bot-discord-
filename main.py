@@ -22,7 +22,7 @@ STOCKFISH_URL = "https://github.com/official-stockfish/Stockfish/releases/downlo
 OPENING_BOOK_URL = "https://github.com/lichess-org/chess-openings.git"
 
 WORK_DIR = Path("/tmp/stockfish")
-ENGINE_BIN = WORK_DIR / "stockfish"
+ENGINE_BIN = WORK_DIR / "stockfish_bin"
 BOOK_PATH = WORK_DIR / "opening_book.bin" # Chemin vers le livre d'ouvertures
 
 # --- MISE EN PLACE DISCORD ---
