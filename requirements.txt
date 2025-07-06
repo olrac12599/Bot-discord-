@@ -1,9 +1,4 @@
-python-chess
-requests
-zstandard
-stockfish
-discord.py>=2.3.2
-matplotlib
-cairosvg
-
-
+discord.py
+python-dotenv
+playwright
+ffmpeg-python
