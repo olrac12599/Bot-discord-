@@ -19,7 +19,7 @@ DISCORD_TOKEN = os.getenv("DISCORD_TOKEN") or "VOTRE_TOKEN_DISCORD_ICI"
 COMMAND_PREFIX = "!"
 STOCKFISH_URL = "https://github.com/official-stockfish/Stockfish/releases/download/sf_17.1/stockfish-ubuntu-x86-64-avx2.tar"
 # URL d'un livre d'ouvertures populaire (format Polyglot .bin)
-OPENING_BOOK_URL = "https://github.com/goutham/polyglot/raw/master/book/book.bin"
+OPENING_BOOK_URL = "https://github.com/lichess-org/chess-openings.git"
 
 WORK_DIR = Path("/tmp/stockfish_bot")
 ENGINE_BIN = WORK_DIR / "stockfish"
