@@ -1,9 +1,9 @@
 # Étape 1: Choisir une image de base avec Python
 FROM python:3.12-slim
 
-# Étape 2: Installer les programmes système nécessaires
-# On ajoute libcairo2 à la liste des paquets à installer
-RUN apt-get update && apt-get install -y stockfish libcairo2 && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y stockfish
+
+
 
 # Étape 3: Préparer l'environnement pour le code de l'application
 WORKDIR /app
