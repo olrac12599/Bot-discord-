@@ -18,7 +18,7 @@ intents = discord.Intents.default()
 intents.message_content = True
 bot = commands.Bot(command_prefix=COMMAND_PREFIX, intents=intents)
 
-# ---- STOCKFISH INSTALLATION ----
+# ---- INSTALLATION STOCKFISH ----
 def download_stockfish():
     WORK_DIR.mkdir(parents=True, exist_ok=True)
     archive = WORK_DIR / "sf.tar"
@@ -121,7 +121,7 @@ async def analyser(ctx, *, pgn: str):
         score_cp = score_after.white().score(mate_score=10000) / 100.0
 
         await ctx.send(
-            f"♟️ Coup {index + 1} : `{board.san(move)}`\n"
+            f"♟️ Coup {index + 1} : `{move.uci()}`\n"
             f"Qualité : {quality}\n"
             f"Évaluation après le coup : `{score_cp}`"
         )
