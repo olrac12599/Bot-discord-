@@ -12,7 +12,7 @@ DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
 
 # Initialisation de Stockfish
 # La bibliothèque va télécharger une version compatible automatiquement.
-stockfish = Stockfish()
+stockfish = Stockfish(path="/usr/bin/stockfish")
 
 def classify_move(eval_before, eval_after):
     delta = eval_after - eval_before
