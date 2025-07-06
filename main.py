@@ -5,7 +5,7 @@ STOCKFISH_PATH = "/tmp/stockfish"
 
 def download_stockfish():
     print("📦 Téléchargement de Stockfish…")
-    url = "https://github.com/official-stockfish/Stockfish/releases/latest/download/stockfish-ubuntu-x86-64-avx2.tar"
+    url = "https://github.com/official-stockfish/Stockfish/releases/download/sf_17.1/stockfish-ubuntu-x86-64-avx2.tar"
     tmp_tar = "/tmp/stockfish.tar"
     urllib.request.urlretrieve(url, tmp_tar)
 
