@@ -1,10 +1,9 @@
 import os
-import asyncio
 import discord
+import asyncio
 from discord.ext import commands
 from playwright.async_api import async_playwright
 from dotenv import load_dotenv
-import subprocess
 
 load_dotenv()
 
@@ -17,50 +16,45 @@ intents = discord.Intents.default()
 intents.message_content = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 
-async def record_screen(duration=30):
-    output_file = "/tmp/insta_record.mp4"
-    cmd = [
-        "ffmpeg",
-        "-video_size", "1280x720",
-        "-framerate", "25",
-        "-f", "x11grab",
-        "-i", ":99.0",
-        "-t", str(duration),
-        output_file
-    ]
-    return await asyncio.create_subprocess_exec(*cmd)
-
 @bot.command()
 async def insta(ctx):
-    await ctx.send("📸 Lancement de l'enregistrement Instagram...")
+    await ctx.send("📸 Connexion à Instagram en cours...")
 
     try:
-        ffmpeg_proc = await record_screen(duration=30)
-
+        output_path = "/tmp/insta_record.webm"
         async with async_playwright() as p:
-            browser = await p.chromium.launch(headless=True)
-            context = await browser.new_context(viewport={"width": 1280, "height": 720})
+            browser = await p.chromium.launch(headless=True, args=["--use-gl=egl"])
+            context = await browser.new_context(record_video_dir="/tmp", viewport={"width": 1280, "height": 720})
             page = await context.new_page()
 
-            await page.goto("https://www.instagram.com/accounts/login/", timeout=60000)
+            await page.goto("https://www.instagram.com/accounts/login/")
             await page.fill('input[name="username"]', INSTA_USERNAME)
             await page.fill('input[name="password"]', INSTA_PASSWORD)
             await page.click('button[type="submit"]')
             await page.wait_for_timeout(5000)
 
-            await page.goto(f"https://www.instagram.com/{ACCOUNT_TO_WATCH}/", timeout=60000)
+            await page.goto(f"https://www.instagram.com/{ACCOUNT_TO_WATCH}/")
             await page.wait_for_timeout(25000)
 
             await browser.close()
 
-        await ffmpeg_proc.wait()
-        await ctx.send("🎥 Enregistrement terminé.", file=discord.File("/tmp/insta_record.mp4"))
+            # Chercher la vidéo générée
+            video_path = None
+            for file in os.listdir("/tmp"):
+                if file.endswith(".webm"):
+                    video_path = os.path.join("/tmp", file)
+                    break
+
+            if video_path and os.path.exists(video_path):
+                await ctx.send("🎥 Enregistrement terminé !", file=discord.File(video_path))
+            else:
+                await ctx.send("❌ Aucune vidéo trouvée.")
 
     except Exception as e:
-        error_text = str(e)
-        if len(error_text) > 1900:
-            error_text = error_text[:1900]
-        await ctx.send(f"❌ Erreur : {error_text}")
+        msg = str(e)
+        if len(msg) > 1900:
+            msg = msg[:1900]
+        await ctx.send(f"❌ Erreur : {msg}")
 
 @bot.event
 async def on_ready():
