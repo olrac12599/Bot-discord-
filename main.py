@@ -4,72 +4,63 @@ import discord
 from discord.ext import commands
 from playwright.async_api import async_playwright
 from dotenv import load_dotenv
+import subprocess
 
 load_dotenv()
+
+DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
+INSTA_USERNAME = os.getenv("INSTA_USERNAME")
+INSTA_PASSWORD = os.getenv("INSTA_PASSWORD")
+ACCOUNT_TO_WATCH = os.getenv("ACCOUNT_TO_WATCH")
 
 intents = discord.Intents.default()
 intents.message_content = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 
-DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
-INSTAGRAM_USERNAME = os.getenv("INSTAGRAM_USERNAME")
-INSTAGRAM_PASSWORD = os.getenv("INSTAGRAM_PASSWORD")
-ACCOUNT_TO_WATCH = os.getenv("ACCOUNT_TO_WATCH")
-
-intents = commands.Intents.default()
-intents.message_content = True
-bot = commands.Bot(command_prefix="!", intents=intents)
-
-async def record_screen(output="record.mp4", duration=30):
+async def record_screen(duration=30):
+    output_file = "/tmp/insta_record.mp4"
     cmd = [
-        "ffmpeg", "-y",
+        "ffmpeg",
         "-video_size", "1280x720",
+        "-framerate", "25",
         "-f", "x11grab",
         "-i", ":99.0",
         "-t", str(duration),
-        output
+        output_file
     ]
     return await asyncio.create_subprocess_exec(*cmd)
 
 @bot.command()
 async def insta(ctx):
-    await ctx.send("📸 Connexion à Instagram...")
+    await ctx.send("📸 Lancement de l'enregistrement Instagram...")
 
     try:
-        # Lancer l'enregistrement (async)
         ffmpeg_proc = await record_screen(duration=30)
 
-        # Lancer Playwright en headless
         async with async_playwright() as p:
-            browser = await p.chromium.launch(headless=True)
-            context = await browser.new_context()
+            browser = await p.chromium.launch(headless=False, args=["--display=:99"])
+            context = await browser.new_context(viewport={"width": 1280, "height": 720})
             page = await context.new_page()
 
-            await page.goto("https://www.instagram.com/accounts/login/")
-            await page.wait_for_timeout(3000)
-
-            await page.fill('input[name="username"]', INSTAGRAM_USERNAME)
-            await page.fill('input[name="password"]', INSTAGRAM_PASSWORD)
+            await page.goto("https://www.instagram.com/accounts/login/", timeout=60000)
+            await page.fill('input[name="username"]', INSTA_USERNAME)
+            await page.fill('input[name="password"]', INSTA_PASSWORD)
             await page.click('button[type="submit"]')
+            await page.wait_for_timeout(5000)
 
-            await page.wait_for_timeout(5000)
-            await page.goto(f"https://www.instagram.com/{ACCOUNT_TO_WATCH}/")
-            await page.wait_for_timeout(5000)
+            await page.goto(f"https://www.instagram.com/{ACCOUNT_TO_WATCH}/", timeout=60000)
+            await page.wait_for_timeout(25000)
 
             await browser.close()
 
         await ffmpeg_proc.wait()
-
-        if os.path.exists("record.mp4"):
-            await ctx.send("🎥 Voici la vidéo : ", file=discord.File("record.mp4"))
-        else:
-            await ctx.send("❌ Échec de l'enregistrement vidéo.")
+        await ctx.send("🎥 Enregistrement terminé.", file=discord.File("/tmp/insta_record.mp4"))
 
     except Exception as e:
-        err_msg = f"❌ Erreur : {str(e)}"
-        if len(err_msg) > 2000:
-            err_msg = err_msg[:1990] + "..."
-        await ctx.send(err_msg)
+        error_text = str(e)
+        if len(error_text) > 1900:
+            error_text = error_text[:1900]
+        await ctx.send(f"❌ Erreur : {error_text}")
 
 @bot.event
 async def on_ready():
