@@ -1,16 +1,27 @@
-import os, io, stat, tarfile, shutil, requests, re
+import os
+import io
+import stat
+import tarfile
+import shutil
+import requests
+import re
+import sys
 from pathlib import Path
 import discord
 from discord.ext import commands
 import chess
 import chess.engine
 import chess.pgn
+import chess.svg
+import matplotlib.pyplot as plt
+import cairosvg
 
 # --- CONFIG ---
+# Chargez votre token depuis une variable d'environnement pour plus de sécurité
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN") or "VOTRE_TOKEN_DISCORD_ICI"
 COMMAND_PREFIX = "!"
-STOCKFISH_URL = "https://github.com/official-stockfish/Stockfish/releases/download/sf_17.1/stockfish-ubuntu-x86-64-avx2.tar"
-WORK_DIR = Path("/tmp/stockfish")
+# Utilise un dossier plus persistant que /tmp
+WORK_DIR = Path.home() / ".stockfish_bot"
 ENGINE_BIN = WORK_DIR / "stockfish_bin"
 
 # --- DISCORD SETUP ---
@@ -18,116 +29,221 @@ intents = discord.Intents.default()
 intents.message_content = True
 bot = commands.Bot(command_prefix=COMMAND_PREFIX, intents=intents)
 
-# --- STOCKFISH INSTALL ---
-def download_stockfish():
-    WORK_DIR.mkdir(parents=True, exist_ok=True)
-    archive = WORK_DIR / "sf.tar"
-    print("📥 Téléchargement de Stockfish...")
-    r = requests.get(STOCKFISH_URL, stream=True, timeout=60)
-    r.raise_for_status()
-    with open(archive, "wb") as f:
-        for chunk in r.iter_content(8192):
-            f.write(chunk)
-    return archive
+# --- STOCKFISH INSTALL (AMÉLIORÉ) ---
+def get_stockfish_url():
+    """Détermine la bonne URL de Stockfish en fonction de l'OS."""
+    if sys.platform.startswith("linux"):
+        # AVX2 est commun sur les CPU modernes, mais on pourrait ajouter une option pour les plus anciens
+        return "https://github.com/official-stockfish/Stockfish/releases/latest/download/stockfish-ubuntu-x86-64-avx2.tar"
+    elif sys.platform == "win32":
+        return "https://github.com/official-stockfish/Stockfish/releases/latest/download/stockfish-windows-x86-64-avx2.zip"
+    elif sys.platform == "darwin": # macOS
+        return "https://github.com/official-stockfish/Stockfish/releases/latest/download/stockfish-macos-x86-64-modern.tar"
+    else:
+        raise RuntimeError(f"Système d'exploitation non supporté : {sys.platform}")
 
-def extract_stockfish(archive: Path):
+def download_and_extract_stockfish():
+    """Télécharge et extrait Stockfish."""
+    stockfish_url = get_stockfish_url()
+    WORK_DIR.mkdir(parents=True, exist_ok=True)
+    archive_path = WORK_DIR / Path(stockfish_url).name
+    
+    print(f"📥 Téléchargement de Stockfish depuis {stockfish_url}...")
+    r = requests.get(stockfish_url, stream=True, timeout=60)
+    r.raise_for_status()
+    with open(archive_path, "wb") as f:
+        shutil.copyfileobj(r.raw, f)
+
     print("📂 Extraction du binaire...")
-    with tarfile.open(archive, "r:") as tar:
-        tar.extractall(WORK_DIR, filter="data")
-    for f in WORK_DIR.rglob("*"):
-        if f.is_file() and os.access(f, os.X_OK) and "stockfish" in f.name:
+    shutil.unpack_archive(archive_path, WORK_DIR)
+    
+    # Cherche le binaire exécutable de stockfish
+    for f in WORK_DIR.rglob("*stockfish*"):
+        if f.is_file() and (os.access(f, os.X_OK) or f.name.endswith(".exe")):
+            f.chmod(f.stat().st_mode | stat.S_IEXEC | stat.S_IXGRP | stat.S_IXOTH)
             shutil.copyfile(f, ENGINE_BIN)
-            ENGINE_BIN.chmod(ENGINE_BIN.stat().st_mode | stat.S_IEXEC)
-            print(f"✅ Stockfish installé depuis {f}")
+            print(f"✅ Stockfish installé : {ENGINE_BIN}")
+            archive_path.unlink() # Nettoyage de l'archive
             return True
-    return False
+            
+    raise RuntimeError("❌ Binaire de Stockfish introuvable après extraction.")
 
 def ensure_stockfish():
-    if ENGINE_BIN.exists():
-        return
-    archive = download_stockfish()
-    if not extract_stockfish(archive):
-        raise RuntimeError("❌ Stockfish introuvable après extraction.")
-    archive.unlink(missing_ok=True)
+    """S'assure que Stockfish est prêt à l'emploi."""
+    if not ENGINE_BIN.exists():
+        download_and_extract_stockfish()
 
-# --- ANALYSE LOGIQUE ---
-def get_move_quality(score_before, score_after, turn):
-    pov_before = score_before.white() if turn == chess.WHITE else score_before.black()
-    pov_after = score_after.white() if turn == chess.WHITE else score_after.black()
-    if pov_before.is_mate() or pov_after.is_mate():
-        return "⚡️ Coup décisif"
-    loss = pov_before.score() - pov_after.score()
-    if loss > 200:
-        return "🔴 ⁉️ Gaffe"
-    elif loss > 100:
-        return "🟠 ❓ Erreur"
-    elif loss > 50:
-        return "🟡 ❔ Imprécision"
+# --- LOGIQUE D'ANALYSE (AMÉLIORÉE) ---
+def get_move_quality(cp_loss: int):
+    """Retourne une classification et une couleur basées sur la perte de centipawns."""
+    if cp_loss <= 15:
+        return "Excellent", "🟢"
+    elif cp_loss <= 30:
+        return "Bon", "🔵"
+    elif cp_loss <= 70:
+        return "Imprécision", "🟡"
+    elif cp_loss <= 150:
+        return "Erreur", "🟠"
     else:
-        return "📚 Théorique"
+        return "Gaffe", "🔴"
 
-# --- COMMANDE !analyser ---
-@bot.command()
-async def analyser(ctx, *, pgn: str):
-    await ctx.send("⏳ Analyse en cours...")
+def calculate_accuracy(centipawn_losses: list) -> float:
+    """Calcule un score de précision en pourcentage."""
+    if not centipawn_losses:
+        return 100.0
+    # Formule simple pour mapper la perte de cp à un score de précision
+    accuracy_scores = [100 * (1 - min(1, cp_loss / 300)) for cp_loss in centipawn_losses]
+    return sum(accuracy_scores) / len(accuracy_scores)
 
+# --- GÉNÉRATION VISUELLE ---
+def generate_eval_graph(evals: list, path: Path):
+    """Génère un graphique de l'évaluation de la partie."""
+    plt.figure(figsize=(10, 4))
+    plt.plot(evals, color='black', linewidth=2)
+    plt.title("Évaluation de la Partie")
+    plt.xlabel("Numéro de Coup")
+    plt.ylabel("Avantage (en centipawns)")
+    plt.grid(True, linestyle='--', alpha=0.6)
+    plt.axhline(0, color='grey', linewidth=1)
+    # Limite l'axe Y pour une meilleure lisibilité, sauf si les valeurs sont extrêmes
+    max_val = max(abs(e) for e in evals) if evals else 1000
+    display_limit = min(max_val + 100, 1000)
+    plt.ylim(-display_limit, display_limit)
+    plt.savefig(path, format='png', bbox_inches='tight')
+    plt.close()
+
+# --- COMMANDE !analyser (REFAITE) ---
+@bot.command(name="analyser", help="Analyse une partie d'échecs depuis un PGN ou une URL (lichess.org, chess.com).")
+async def analyser(ctx, *, game_input: str):
+    pgn_str = game_input.strip()
+    
+    # Détection d'URL
+    if pgn_str.startswith("http"):
+        await ctx.send(f"⏳ Récupération de la partie depuis l'URL...")
+        try:
+            if "lichess.org" in pgn_str:
+                game_id = re.search(r"lichess\.org/(\w{8})", pgn_str).group(1)
+                url = f"https://lichess.org/game/export/{game_id}"
+                headers = {"Accept": "application/x-chess-pgn"}
+                response = requests.get(url, headers=headers)
+            elif "chess.com" in pgn_str:
+                # L'API de chess.com est différente, on récupère le PGN via leur API publique
+                # Exemple : https://www.chess.com/game/live/114995775955 -> T7 (archive)/2024-05 (mois)
+                # C'est complexe, on va se contenter d'une approche simple
+                response = requests.get(pgn_str + ".pgn") # Tente d'ajouter .pgn
+                if not response.ok: # Si ça ne marche pas, il faut une méthode plus complexe
+                     await ctx.send("❌ L'API de Chess.com est complexe. Essayez de fournir le PGN directement.")
+                     return
+            else:
+                 await ctx.send("❌ URL non supportée. Utilisez un lien Lichess ou Chess.com.")
+                 return
+                 
+            response.raise_for_status()
+            pgn_str = response.text
+        except Exception as e:
+            await ctx.send(f"❌ Erreur lors de la récupération de la partie : {e}")
+            return
+            
     try:
-        # Nettoyage
-        pgn_clean = re.sub(r"{\[.*?\]}", "", pgn)
-        pgn_io = io.StringIO(pgn_clean)
+        pgn_io = io.StringIO(pgn_str)
         game = chess.pgn.read_game(pgn_io)
-
         if not game:
-            await ctx.send("❌ Format PGN invalide.")
+            await ctx.send("❌ Format PGN invalide ou partie non trouvée.")
             return
 
+        await ctx.send(f"⏳ Analyse de la partie en cours... Cela peut prendre un moment.")
+        
+        analysis_report = []
+        evals_graph = []
+        white_cp_losses, black_cp_losses = [], []
+        
         board = game.board()
-        engine = chess.engine.SimpleEngine.popen_uci(str(ENGINE_BIN))
-        analyses = []
+        # Utilisation du moteur en mode asynchrone
+        async with chess.engine.SimpleEngine.popen_uci(str(ENGINE_BIN)) as engine:
+            info_before = await engine.analyse(board, chess.engine.Limit(time=0.5))
+            
+            for i, move in enumerate(game.mainline_moves()):
+                info_after = await engine.analyse(board, chess.engine.Limit(time=0.5), root_moves=[move])
+                
+                score_before = info_before['score'].pov(board.turn)
+                score_after = info_after[0]['score'].pov(board.turn)
 
-        for move in game.mainline_moves():
-            if move not in board.legal_moves:
-                await ctx.send(f"⚠️ Coup illégal détecté : `{move.uci()}`")
-                break
+                # Calcul de la perte en centipawns
+                cp_loss = 0
+                if score_before.is_mate() or score_after.is_mate():
+                    cp_loss = 350 # Perte arbitraire haute pour un mat raté/subi
+                else:
+                    cp_loss = score_before.score() - score_after.score()
 
-            info_before = engine.analyse(board, chess.engine.Limit(time=0.1))
-            board.push(move)
-            info_after = engine.analyse(board, chess.engine.Limit(time=0.1))
+                quality, emoji = get_move_quality(cp_loss)
+                best_move = board.san(info_before["pv"][0]) if "pv" in info_before else "N/A"
+                
+                player_icon = "⚪️" if board.turn == chess.WHITE else "⚫️"
+                move_san = board.san(move)
+                
+                analysis_line = f"`{i+1}. {move_san.ljust(7)}` — {emoji} {quality}"
+                if quality in ["Imprécision", "Erreur", "Gaffe"] and best_move != move_san:
+                    analysis_line += f" (Meilleur: **{best_move}**)"
+                analysis_report.append(analysis_line)
 
-            analyses.append((move, info_before["score"], info_after["score"]))
+                if board.turn == chess.WHITE:
+                    white_cp_losses.append(cp_loss)
+                else:
+                    black_cp_losses.append(cp_loss)
+                    
+                board.push(move)
+                info_before = info_after[0]
+                evals_graph.append(info_before["score"].white().score(mate_score=10000) or 0)
 
-        engine.quit()
+        # Calculs finaux
+        white_accuracy = calculate_accuracy(white_cp_losses)
+        black_accuracy = calculate_accuracy(black_cp_losses)
 
-        if not analyses:
-            await ctx.send("❌ Aucune analyse effectuée.")
-            return
-
-        # Génération du texte
-        msg = ""
-        board = game.board()
-        for i, (move, score_before, score_after) in enumerate(analyses):
-            player = "⚪️" if board.turn == chess.WHITE else "⚫️"
-            san = board.san(move)
-            board.push(move)
-            quality = get_move_quality(score_before, score_after, not board.turn)
-            msg += f"{player} {san} — {quality}\n"
-
-        # Envoie en fichier si trop long
-        if len(msg) > 1900:
-            buffer = io.StringIO(msg)
-            await ctx.send("📝 Analyse complète :", file=discord.File(fp=buffer, filename="analyse.txt"))
-        else:
-            await ctx.send(msg)
+        # Génération du graphique
+        graph_path = WORK_DIR / f"eval_graph_{ctx.message.id}.png"
+        generate_eval_graph(evals_graph, graph_path)
+        
+        # Création de l'embed
+        embed = discord.Embed(
+            title=f"Analyse de la Partie : {game.headers.get('White', '?')} vs {game.headers.get('Black', '?')}",
+            color=discord.Color.blue()
+        )
+        embed.add_field(
+            name="🎯 Précision",
+            value=f"⚪️ **Blancs**: {white_accuracy:.1f}%\n⚫️ **Noirs**: {black_accuracy:.1f}%",
+            inline=False
+        )
+        embed.set_footer(text="Analyse par Stockfish via Discord Bot")
+        
+        # Ajout du graphique à l'embed
+        file = discord.File(graph_path, filename="evaluation.png")
+        embed.set_image(url="attachment://evaluation.png")
+        
+        # Envoi de l'analyse détaillée en fichier texte
+        report_text = "\n".join(analysis_report)
+        buffer = io.StringIO(report_text)
+        report_file = discord.File(fp=buffer, filename="analyse_detaillee.txt")
+        
+        await ctx.send(embed=embed, files=[file, report_file])
 
     except Exception as e:
-        await ctx.send(f"❌ Erreur pendant l'analyse : {e}")
+        await ctx.send(f"❌ Une erreur majeure est survenue pendant l'analyse : {e}")
+        import traceback
+        traceback.print_exc()
 
-# --- READY ---
+# --- ÉVÉNEMENTS DU BOT ---
 @bot.event
 async def on_ready():
     print(f"✅ Connecté en tant que {bot.user}")
+    print("🤖 Le bot est prêt à analyser !")
 
-# --- MAIN ---
+# --- POINT D'ENTRÉE ---
 if __name__ == "__main__":
-    ensure_stockfish()
-    bot.run(DISCORD_TOKEN)
+    try:
+        ensure_stockfish()
+        bot.run(DISCORD_TOKEN)
+    except RuntimeError as e:
+        print(e)
+    except discord.errors.LoginFailure:
+        print("❌ Échec de la connexion : Le token Discord est invalide.")
+
