@@ -76,7 +76,7 @@ async def analyser(ctx, *, pgn: str):
     await ctx.send("🔎 Analyse en cours...")
 
     try:
-        # Nettoyer les annotations spéciales de Chess.com
+        # Nettoyage des annotations inutiles
         pgn_clean = re.sub(r"{\[.*?\]}", "", pgn)
         pgn_io = io.StringIO(pgn_clean)
         game = chess.pgn.read_game(pgn_io)
@@ -91,7 +91,7 @@ async def analyser(ctx, *, pgn: str):
 
         for move in game.mainline_moves():
             if move not in board.legal_moves:
-                await ctx.send(f"⚠️ Coup illégal détecté : {move}")
+                await ctx.send(f"⚠️ Coup illégal détecté : `{move.uci()}`")
                 break
 
             info_before = engine.analyse(board, chess.engine.Limit(time=0.1))
@@ -106,25 +106,21 @@ async def analyser(ctx, *, pgn: str):
             await ctx.send("❌ Aucune analyse effectuée.")
             return
 
-        index = 4 if len(analyses) > 4 else len(analyses) - 1
-        move, score_before, score_after = analyses[index]
-
-        # Rejouer les coups jusqu'à ce coup
+        # Générer le message avec tous les coups
+        msg = ""
         board = game.board()
-        for i in range(index + 1):
-            if analyses[i][0] in board.legal_moves:
-                board.push(analyses[i][0])
-            else:
-                break
+        for i, (move, score_before, score_after) in enumerate(analyses):
+            board.push(move)
+            quality = get_move_quality(score_before, score_after, not board.turn)
+            score_cp = score_after.white().score(mate_score=10000) / 100.0
+            msg += f"**{i+1}.** `{move.uci()}` → {quality} | Éval : `{score_cp}`\n"
 
-        quality = get_move_quality(score_before, score_after, not board.turn)
-        score_cp = score_after.white().score(mate_score=10000) / 100.0
-
-        await ctx.send(
-            f"♟️ Coup {index + 1} : `{move.uci()}`\n"
-            f"Qualité : {quality}\n"
-            f"Évaluation après le coup : `{score_cp}`"
-        )
+        # Envoyer en plusieurs messages si trop long
+        if len(msg) > 2000:
+            for chunk in [msg[i:i+1900] for i in range(0, len(msg), 1900)]:
+                await ctx.send(chunk)
+        else:
+            await ctx.send(msg)
 
     except Exception as e:
         await ctx.send(f"❌ Erreur pendant l'analyse : {e}")
