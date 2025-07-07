@@ -1,187 +1,137 @@
+import os
+import io
+import re
+import aiohttp
 import discord
 from discord.ext import commands
-import os
-import asyncio
-import time
-import subprocess
-import traceback
-import random
-import undetected_chromedriver as uc
-from selenium.webdriver.common.by import By
-from selenium.webdriver.support.ui import WebDriverWait
-from selenium.webdriver.support import expected_conditions as EC
-from selenium.common.exceptions import WebDriverException
+import chess
+import chess.pgn
+import matplotlib.pyplot as plt
 
-# --- CONFIGURATION DES VARIABLES D'ENVIRONNEMENT ---
-DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
-INSTA_USERNAME = os.getenv("INSTA_USERNAME")
-INSTA_PASSWORD = os.getenv("INSTA_PASSWORD")
-DEFAULT_ACCOUNT = os.getenv("ACCOUNT_TO_WATCH", "instagram")
+# --- CONFIGURATION ---
+DISCORD_TOKEN = os.getenv("DISCORD_TOKEN") or "VOTRE_TOKEN_DISCORD"
+COMMAND_PREFIX = "!"
+OPENING_BOOK_URL = "https://github.com/lichess-org/chess-openings.git"
 
-if not all([DISCORD_TOKEN, INSTA_USERNAME, INSTA_PASSWORD]):
-    raise ValueError("ERREUR: Variables d'environnement manquantes.")
-
-# --- INITIALISATION DU BOT DISCORD ---
+# --- MISE EN PLACE DISCORD ---
 intents = discord.Intents.default()
 intents.message_content = True
-bot = commands.Bot(command_prefix="!", intents=intents)
+bot = commands.Bot(command_prefix=COMMAND_PREFIX, intents=intents)
 
-# --- FONCTION DE CAPTURE D'ÉCRAN ---
-def capture_on_error(driver, label="error"):
-    timestamp = int(time.time())
-    filename = f"/tmp/screenshot_{label}_{timestamp}.png"
-    try:
-        driver.save_screenshot(filename)
-        print(f"[📸] Screenshot : {filename}")
-        return filename
-    except Exception as e:
-        print(f"[❌] Échec screenshot : {e}")
-    return None
-
-# --- FONCTION D'ENREGISTREMENT INSTAGRAM ---
-def record_insta_session(account_to_watch):
-    os.environ["DISPLAY"] = ":99"
-    timestamp = int(time.time())
-    video_filename = f"/tmp/insta_{account_to_watch}_{timestamp}.webm"
-    screenshot_file = None
-
-    xvfb = subprocess.Popen(["Xvfb", ":99", "-screen", "0", "1280x720x24"])
-    time.sleep(1)
-
-    chrome_options = uc.ChromeOptions()
-    chrome_options.add_argument("--no-sandbox")
-    chrome_options.add_argument("--disable-dev-shm-usage")
-    chrome_options.add_argument("--window-size=1280,720")
-    chrome_options.add_argument("--lang=en-US")
-    chrome_options.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36")
-
-    driver = None
-    ffmpeg = None
-
-    try:
-        driver = uc.Chrome(options=chrome_options, headless=False)
-        driver.execute_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
-        wait = WebDriverWait(driver, 20)
-
-        ffmpeg = subprocess.Popen([
-            "ffmpeg", "-y", "-video_size", "1280x720", "-framerate", "25",
-            "-f", "x11grab", "-i", ":99.0", "-c:v", "libvpx-vp9",
-            "-b:v", "1M", "-pix_fmt", "yuv420p", video_filename
-        ])
-
-        MAX_RETRIES = 3
-        RETRY_DELAY = 5
-        for attempt in range(MAX_RETRIES):
-            driver.get("https://www.instagram.com/accounts/login/")
-            time.sleep(random.uniform(3, 6))
-            if "Too Many Requests" in driver.page_source:
-                print(f"[🚫] Tentative {attempt+1}/{MAX_RETRIES} : 429 détecté.")
-                time.sleep(RETRY_DELAY * (attempt + 1))
+# --- UTILITAIRES LICHESS EVAL ---
+async def get_lichess_eval(fen: str) -> dict:
+    url = f"https://lichess.org/api/cloud-eval?fen={fen}"
+    async with aiohttp.ClientSession() as session:
+        async with session.get(url) as resp:
+            if resp.status == 200:
+                return await resp.json()
             else:
-                break
-        else:
-            raise Exception("Erreur 429 répétée")
+                raise RuntimeError(f"Erreur Lichess Eval: HTTP {resp.status}")
 
-        try:
-            cookie_btn = WebDriverWait(driver, 10).until(
-                EC.element_to_be_clickable((By.XPATH, "//button[contains(text(), 'Allow all cookies')]"))
-            )
-            cookie_btn.click()
-            time.sleep(random.uniform(1, 2))
-        except:
-            print("[ℹ️] Pas de pop-up cookies.")
+def get_move_quality(cp_before: int, cp_after: int, is_best: bool, is_sacrifice: bool) -> str:
+    loss = cp_before - cp_after
+    if is_best:
+        if is_sacrifice and loss < -50:
+            return "✨ Brillant (!!)"
+        return "⭐ Meilleur coup"
+    if loss < 10:
+        return "👍 Excellent"
+    if loss < 40:
+        return "✅ Bon"
+    if loss < 100:
+        return "🟡 Imprécision"
+    if loss < 250:
+        return "🟠 Erreur"
+    return "🔴 Gaffe"
 
-        print("[🔐] Connexion...")
-        wait.until(EC.visibility_of_element_located((By.NAME, "username"))).send_keys(INSTA_USERNAME)
-        time.sleep(random.uniform(1, 2))
-        driver.find_element(By.NAME, "password").send_keys(INSTA_PASSWORD)
-        time.sleep(random.uniform(1, 2.5))
-        driver.find_element(By.XPATH, "//button[@type='submit']").click()
+def generate_eval_graph(evals: list[int], path):
+    plt.figure(figsize=(10,4))
+    plt.plot(evals, color='black', linewidth=1.5)
+    plt.axhline(0, color='grey', linestyle='--')
+    plt.fill_between(range(len(evals)), evals, 0, where=[e>0 for e in evals], color='white', edgecolor='black')
+    plt.fill_between(range(len(evals)), evals, 0, where=[e<=0 for e in evals], color='black', edgecolor='black')
+    plt.title("Évaluation (Cloud Eval)")
+    plt.xlabel("Coup")
+    plt.ylabel("Centipawns")
+    plt.grid(axis='y', linestyle=':')
+    plt.ylim(min(evals)-100, max(evals)+100)
+    plt.savefig(path, bbox_inches="tight", dpi=150)
+    plt.close()
 
-        wait.until(EC.presence_of_element_located((By.XPATH, "//*[contains(@href, '/direct/inbox/')]")))
-        print("[✅] Connecté à Instagram.")
-        time.sleep(random.uniform(2, 4))
-
-        try:
-            btn = WebDriverWait(driver, 10).until(
-                EC.element_to_be_clickable((By.XPATH, "//button[contains(text(), 'Not Now')]"))
-            )
-            btn.click()
-            time.sleep(random.uniform(1, 2))
-        except:
-            print("[ℹ️] Pas de pop-up 'infos'.")
-
-        try:
-            notif = WebDriverWait(driver, 10).until(
-                EC.element_to_be_clickable((By.XPATH, "//button[contains(text(), 'Not Now')]"))
-            )
-            notif.click()
-            time.sleep(random.uniform(1, 2))
-        except:
-            print("[ℹ️] Pas de pop-up notif.")
-
-        driver.get(f"https://www.instagram.com/{account_to_watch}/")
-        wait.until(EC.presence_of_element_located((By.TAG_NAME, "h2")))
-        print("[✅] Profil chargé.")
-        time.sleep(10)
-
-    except Exception as e:
-        print(f"[❌] Erreur principale : {e}")
-        traceback.print_exc()
-        if driver:
-            screenshot_file = capture_on_error(driver, "insta_error")
-
-    finally:
-        if ffmpeg and ffmpeg.poll() is None:
-            ffmpeg.terminate()
-            try:
-                ffmpeg.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                ffmpeg.kill()
-        if driver:
-            driver.quit()
-        if xvfb:
-            xvfb.terminate()
-
-    return video_filename if os.path.exists(video_filename) else None, \
-           screenshot_file if screenshot_file and os.path.exists(screenshot_file) else None
-
-# --- COMMANDE DISCORD ---
-@bot.command(name="videoinsta")
-async def videoinsta(ctx, account_name: str = None):
-    target_account = account_name or DEFAULT_ACCOUNT
-    await ctx.send(f"🎥 Enregistrement du profil `{target_account}`...")
+# --- COMMANDE !analyser ---
+@bot.command(name="analyser")
+async def analyser(ctx, *, pgn: str):
+    msg = await ctx.send("⏳ Analyse en cours…")
     try:
-        video_file, screenshot = await asyncio.to_thread(record_insta_session, target_account)
+        game = chess.pgn.read_game(io.StringIO(re.sub(r"{\[.*?\]}", "", pgn)))
+        if not game:
+            return await msg.edit(content="❌ PGN invalide")
 
-        if video_file:
-            if os.path.getsize(video_file) < 25 * 1024 * 1024:
-                await ctx.send("✅ Enregistrement terminé !", file=discord.File(video_file))
-            else:
-                await ctx.send("⚠️ Vidéo trop lourde pour Discord (> 25MB).")
-            os.remove(video_file)
-        else:
-            await ctx.send("❌ Erreur pendant l'enregistrement.")
+        report = []
+        evals = [0]
+        board = game.board()
 
-        if screenshot:
-            await ctx.send("🖼️ Screenshot lors de l'erreur :", file=discord.File(screenshot))
-            os.remove(screenshot)
+        for move in game.mainline_moves():
+            fen_before = board.fen()
+            lich = await get_lichess_eval(fen_before)
+            pv0 = lich.get("pvs", [{}])[0]
+            best_move = pv0.get("moves")
+            cp_before = pv0.get("cp", 0)
+
+            san = board.san(move)
+            uci_move = move.uci()
+            is_best = (uci_move == best_move)
+            is_sac = board.is_capture(move) and (
+                chess.PIECE_VALUES.get(board.piece_at(move.to_square).piece_type, 0) 
+                < chess.PIECE_VALUES.get(board.piece_at(move.from_square).piece_type, 0)
+            )
+
+            board.push(move)
+            lich2 = await get_lichess_eval(board.fen())
+            cp_after = lich2.get("pvs", [{}])[0].get("cp", cp_before)
+
+            quality = get_move_quality(cp_before, cp_after, is_best, is_sac)
+            report.append(f"🔹 {san:<8} — **{quality}**")
+            evals.append(cp_after)
+
+        graph = WORK_DIR / f"eval_{ctx.message.id}.png"
+        generate_eval_graph(evals, graph)
+
+        embed = discord.Embed(title="📊 Analyse Chess.com–style", color=0x1F8B4C)
+        embed.set_image(url=f"attachment://{graph.name}")
+        embed.set_footer(text=f"Demandé par {ctx.author.display_name}")
+        embed.description = "\n".join(report)[:4096]
+
+        files = [discord.File(fp=open(graph, "rb"), filename=graph.name)]
+        await msg.edit(content=None, embed=embed, attachments=files)
 
     except Exception as e:
-        await ctx.send(f"🚨 Erreur critique : {e}")
-        traceback.print_exc()
+        await msg.edit(content=f"❌ Erreur: `{e}`")
 
-@bot.command(name="ping")
-async def ping(ctx):
-    await ctx.send(f"Pong! Latence : {round(bot.latency * 1000)}ms")
+# --- COMMANDE DE PROBLÈMES ---
+@bot.command(name="puzzle", help="Envoie un puzzle tactique Lichess aléatoire.")
+async def puzzle(ctx):
+    await ctx.send("🎲 Chargement d'un puzzle…")
+    async with aiohttp.ClientSession() as s:
+        async with s.get("https://lichess.org/api/puzzle/random") as resp:
+            data = await resp.json()
+
+    fen = data["puzzle"]["fen"]
+    moves = data["puzzle"]["moves"].split()
+    board = chess.Board(fen)
+    san_moves = [board.san(chess.Move.from_uci(m)) for m in moves]
+    solution = san_moves[0]
+    board.push(chess.Move.from_uci(moves[0]))
+
+    embed = discord.Embed(title="🧠 Puzzle tactique", color=0xDD9933)
+    embed.add_field(name="Position (FEN)", value=f"```\n{fen}\n```", inline=False)
+    embed.add_field(name="Premier coup (format UCI)", value=moves[0], inline=True)
+    embed.add_field(name="Solution (SAN)", value=solution, inline=True)
+    await ctx.send(embed=embed)
 
 @bot.event
 async def on_ready():
-    print(f"✅ Connecté en tant que {bot.user}")
-    print("🤖 Prêt à recevoir des commandes.")
-
-async def main():
-    await bot.start(DISCORD_TOKEN)
+    print(f"✅ Connecté comme {bot.user}")
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    bot.run(DISCORD_TOKEN)
