@@ -1,4 +1,4 @@
-discord.py
-selenium
-undetected-chromedriver
-setuptools
+discord.py>=2.0.0
+python-chess>=1.999
+matplotlib>=3.0
+aiohttp>=3.8
